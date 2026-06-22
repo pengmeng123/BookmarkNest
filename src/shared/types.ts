@@ -1,0 +1,102 @@
+export type BookmarkSource = 'x-bookmarks-page' | 'manual-import';
+
+export interface Bookmark {
+  id: string;
+  tweetId?: string;
+  tweetUrl?: string;
+  authorName: string;
+  authorHandle: string;
+  authorAvatarUrl?: string;
+  contentText: string;
+  mediaUrls: string[];
+  createdAtText?: string;
+  createdAt?: number;
+  importedAt: number;
+  updatedAt: number;
+  folderId?: string;
+  tagIds: string[];
+  archived: boolean;
+  deleted: boolean;
+  deletedAt?: number;
+  dedupeKey: string;
+  source: BookmarkSource;
+}
+
+export interface Folder {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  sortOrder: number;
+}
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  createdAt: number;
+  updatedAt: number;
+  usageCount: number;
+}
+
+export type ImportSessionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface ImportSession {
+  id: string;
+  startedAt: number;
+  finishedAt?: number;
+  sourceUrl: string;
+  foundCount: number;
+  insertedCount: number;
+  updatedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  status: ImportSessionStatus;
+}
+
+export type ThemePreference = 'light' | 'dark' | 'system';
+export type ExportFormat = 'json' | 'markdown' | 'csv';
+
+export interface Settings {
+  theme: ThemePreference;
+  defaultExportFormat: ExportFormat;
+  language: 'en';
+}
+
+export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';
+
+export interface LicenseData {
+  pro: boolean;
+  licenseKey: string;
+  instanceId: string;
+  email: string;
+  activatedAt: string | null;
+  expiresAt: string | null;
+  lastValidatedAt: string | null;
+  validationStatus: LicenseValidationStatus;
+}
+
+export type ExtensionMessage =
+  | { type: 'OPEN_APP' }
+  | { type: 'OPEN_UPGRADE' }
+  | { type: 'START_X_IMPORT' }
+  | { type: 'GET_ACTIVE_TAB_IMPORT_STATE' };
+
+export interface MessageResponse<T = unknown> {
+  ok: boolean;
+  data?: T;
+  error?: string;
+}
+
+export interface BookmarkInput {
+  tweetId?: string;
+  tweetUrl?: string;
+  authorName: string;
+  authorHandle: string;
+  authorAvatarUrl?: string;
+  contentText: string;
+  mediaUrls?: string[];
+  createdAtText?: string;
+  createdAt?: number;
+  source: BookmarkSource;
+}

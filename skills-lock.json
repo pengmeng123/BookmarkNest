@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "chrome-extension-development": {
+      "source": "mindrally/skills",
+      "sourceType": "github",
+      "skillPath": "chrome-extension-development/SKILL.md",
+      "computedHash": "8b4b80fef75986f0dac15a969cbaad03579dcebe72e4eb9675468b1b481d03ae"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "4eabc66183767153e404b39d1b839b1c37f2d82d86f0a0d7e880a579d8d62336"
+    },
+    "shadcn": {
+      "source": "shadcn/ui",
+      "sourceType": "github",
+      "skillPath": "skills/shadcn/SKILL.md",
+      "computedHash": "ac9d0d69caac7de1d1e5647f3db3bcd2f13af355d6b3a78780fbf7fc80e8dca0"
+    }
+  }
+}
