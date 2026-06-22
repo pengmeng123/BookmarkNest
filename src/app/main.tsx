@@ -23,6 +23,7 @@ import { searchBookmarks } from '../lib/search/searchBookmarks';
 import { downloadBookmarks } from '../lib/export/download';
 import '../styles/globals.css';
 import { BookmarkList } from './components/BookmarkList';
+import { MoveDialog } from './components/MoveDialog';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { useLibraryData } from './hooks/useLibraryData';
 import { useLicenseState } from './hooks/useLicenseState';
@@ -138,6 +139,7 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [moveTargetIds, setMoveTargetIds] = useState<string[] | null>(null);
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 200);
   const { isPro } = useLicenseState();
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived, isPro }), [folderId, tagId, includeArchived]);
@@ -189,32 +191,32 @@ function App() {
     }
   }
 
-  async function handleMove(bookmarkId: string) {
-    const folderName = window.prompt('Move to folder name');
-    if (!folderName?.trim()) {
-      await refreshAfter(moveBookmarksToFolder([bookmarkId], undefined));
-      return;
-    }
-
-    const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.trim().toLowerCase());
-    const folder = existing ?? (await createFolder(folderName.trim()));
-    await refreshAfter(moveBookmarksToFolder([bookmarkId], folder.id));
+  function handleMove(bookmarkId: string) {
+    setMoveTargetIds([bookmarkId]);
   }
 
-  async function handleBulkMove() {
-    if (!selectedIds.size) {
+  function handleBulkMove() {
+    if (selectedIds.size) {
+      setMoveTargetIds(Array.from(selectedIds));
+    }
+  }
+
+  async function handleMoveToFolder(folderId?: string) {
+    if (!moveTargetIds?.length) {
       return;
     }
+    await refreshAfter(moveBookmarksToFolder(moveTargetIds, folderId));
+    setMoveTargetIds(null);
+  }
 
-    const folderName = window.prompt('Move selected bookmarks to folder');
-    if (!folderName?.trim()) {
-      await refreshAfter(moveBookmarksToFolder(Array.from(selectedIds), undefined));
+  async function handleCreateFolderAndMove(folderName: string) {
+    if (!moveTargetIds?.length) {
       return;
     }
-
-    const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.trim().toLowerCase());
-    const folder = existing ?? (await createFolder(folderName.trim()));
-    await refreshAfter(moveBookmarksToFolder(Array.from(selectedIds), folder.id));
+    const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
+    const folder = existing ?? (await createFolder(folderName));
+    await refreshAfter(moveBookmarksToFolder(moveTargetIds, folder.id));
+    setMoveTargetIds(null);
   }
 
   async function handleTag(bookmarkId: string) {
@@ -412,7 +414,7 @@ function App() {
             error={library.error}
             onArchive={(bookmarkId, archived) => void handleArchive(bookmarkId, archived)}
             onDelete={(bookmarkId) => void handleDelete(bookmarkId)}
-            onMove={(bookmarkId) => void handleMove(bookmarkId)}
+            onMove={handleMove}
             onTag={(bookmarkId) => void handleTag(bookmarkId)}
             onRemoveTag={(bookmarkId) => void handleRemoveTag(bookmarkId)}
             selectedIds={selectedIds}
@@ -420,6 +422,14 @@ function App() {
           />
         </div>
       </section>
+      <MoveDialog
+        folders={library.folders}
+        open={Boolean(moveTargetIds)}
+        itemCount={moveTargetIds?.length ?? 0}
+        onClose={() => setMoveTargetIds(null)}
+        onMove={(nextFolderId) => void handleMoveToFolder(nextFolderId)}
+        onCreateAndMove={(folderName) => void handleCreateFolderAndMove(folderName)}
+      />
     </PageShell>
   );
 }

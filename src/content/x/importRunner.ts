@@ -1,6 +1,5 @@
-import { upsertBookmark } from '../../lib/db/bookmarkRepository';
-import { db } from '../../lib/db/database';
 import type { ImportSession } from '../../shared/types';
+import type { MessageResponse } from '../../shared/types';
 import { parseLoadedBookmarkCards } from './parser';
 
 export interface ImportRunResult {
@@ -39,35 +38,37 @@ export async function runImportFromLoadedCards(
     status: 'running'
   };
 
-  await db.importSessions.add(session);
   onProgress?.({ ...session });
 
+  const bookmarks = [];
   for (const card of parsed.parsed) {
     if (controller?.cancelled) {
       session.status = 'cancelled';
       break;
     }
 
-    try {
-      const result = await upsertBookmark(card.input);
-      if (result.inserted) {
-        session.insertedCount += 1;
-      } else {
-        session.duplicateCount += 1;
-        session.updatedCount += 1;
-      }
-    } catch {
-      session.failedCount += 1;
-    }
-
+    bookmarks.push(card.input);
     onProgress?.({ ...session });
   }
 
-  if (session.status === 'running') {
-    session.status = 'completed';
+  if (session.status !== 'cancelled') {
+    const response = await chrome.runtime.sendMessage({
+      type: 'SAVE_IMPORTED_BOOKMARKS',
+      payload: {
+        sourceUrl,
+        bookmarks,
+        foundCount: parsed.foundCount,
+        failedCount: parsed.failedCount
+      }
+    });
+    const saveResponse = response as MessageResponse<ImportRunResult>;
+    if (!saveResponse.ok || !saveResponse.data) {
+      throw new Error(saveResponse.error ?? 'Unable to save imported bookmarks.');
+    }
+    return saveResponse.data;
   }
+
   session.finishedAt = Date.now();
-  await db.importSessions.put(session);
   onProgress?.({ ...session });
 
   return { session };

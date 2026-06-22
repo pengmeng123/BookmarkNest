@@ -54,6 +54,13 @@ export interface ImportSession {
   status: ImportSessionStatus;
 }
 
+export interface ImportPayload {
+  sourceUrl: string;
+  bookmarks: BookmarkInput[];
+  foundCount: number;
+  failedCount: number;
+}
+
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type ExportFormat = 'json' | 'markdown' | 'csv';
 
@@ -80,6 +87,7 @@ export type ExtensionMessage =
   | { type: 'OPEN_APP' }
   | { type: 'OPEN_UPGRADE' }
   | { type: 'START_X_IMPORT' }
+  | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }
   | { type: 'GET_ACTIVE_TAB_IMPORT_STATE' };
 
 export interface MessageResponse<T = unknown> {
