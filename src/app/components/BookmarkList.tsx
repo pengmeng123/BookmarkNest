@@ -27,23 +27,26 @@ export function BookmarkList({
   onSelectedChange
 }: BookmarkListProps) {
   if (loading) {
-    return <div className="flex min-h-[420px] items-center justify-center p-8 text-sm text-muted-foreground">Loading bookmarks...</div>;
+    return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">Loading bookmarks...</div>;
   }
 
   if (error) {
-    return <div className="flex min-h-[420px] items-center justify-center p-8 text-sm text-red-600">{error}</div>;
+    return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-danger">{error}</div>;
   }
 
   if (matches.length === 0) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center p-8 text-center text-sm text-muted-foreground">
-        Open your X bookmarks page to import currently loaded bookmarks.
+      <div className="flex min-h-[460px] items-center justify-center p-8">
+        <div className="max-w-sm rounded-app border border-dashed border-border bg-background px-6 py-8 text-center">
+          <p className="text-sm font-medium text-foreground">No bookmarks in this view</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">Open X bookmarks in Chrome, let the page load, then import the currently loaded items.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div>
+    <div className="divide-y divide-border">
       {matches.map(({ bookmark, matchedTerms }) => (
         <BookmarkCard
           key={bookmark.id}

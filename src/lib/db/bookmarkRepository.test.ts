@@ -100,6 +100,18 @@ describe('bookmarkRepository', () => {
     expect((await db.tags.get(tag.id))?.usageCount).toBe(0);
   });
 
+  it('allows multiple different tags on the same bookmark', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+    const first = await createTag('alpha');
+    const second = await createTag('beta');
+
+    await addTagToBookmarks([inserted.bookmark.id], first.id);
+    await addTagToBookmarks([inserted.bookmark.id], second.id);
+
+    const [item] = await listBookmarkItems({ isPro: true });
+    expect(item.tags.map((tag) => tag.name).sort()).toEqual(['alpha', 'beta']);
+  });
+
   it('lists bookmark items with folders, tags, archive scope, and soft delete exclusion', async () => {
     const visible = await upsertBookmark(bookmarkInput(1));
     const archived = await upsertBookmark(bookmarkInput(2));

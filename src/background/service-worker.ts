@@ -7,7 +7,7 @@ function openExtensionPage(path: string) {
   return chrome.tabs.create({ url: chrome.runtime.getURL(path) });
 }
 
-async function sendStartImportToActiveTab(): Promise<MessageResponse> {
+async function sendStartImportToActiveTab(mode: 'visible' | 'auto-scroll' = 'visible'): Promise<MessageResponse> {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const bookmarkTabs = await chrome.tabs.query({ url: ['https://x.com/i/bookmarks*', 'https://twitter.com/i/bookmarks*'] });
   const tab = bookmarkTabs.find((candidate) => candidate.windowId === activeTab?.windowId) ?? bookmarkTabs[0] ?? activeTab;
@@ -17,7 +17,7 @@ async function sendStartImportToActiveTab(): Promise<MessageResponse> {
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_X_IMPORT' });
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'START_X_IMPORT', mode });
     if (response?.ok) {
       await chrome.tabs.update(tab.id, { active: true });
     }
@@ -25,7 +25,7 @@ async function sendStartImportToActiveTab(): Promise<MessageResponse> {
   } catch {
     return {
       ok: false,
-      error: 'Open your X bookmarks page, wait for bookmarks to load, then try Import again.'
+      error: 'No loaded X bookmarks page detected. Open x.com/i/bookmarks, wait for the list to appear, then try Import again.'
     };
   }
 }
@@ -88,7 +88,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     }
 
     if (message.type === 'START_X_IMPORT') {
-      sendStartImportToActiveTab().then(sendResponse);
+      sendStartImportToActiveTab(message.mode).then(sendResponse);
       return true;
     }
 

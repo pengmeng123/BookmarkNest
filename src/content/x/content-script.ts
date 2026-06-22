@@ -1,5 +1,5 @@
 import type { ExtensionMessage, MessageResponse } from '../../shared/types';
-import { runImportFromLoadedCards } from './importRunner';
+import { loadMoreBookmarksByScrolling, runImportFromLoadedCards } from './importRunner';
 import { isXBookmarkPage } from './pageDetection';
 
 const CONTROL_ID = 'bookmarknest-import-control';
@@ -39,7 +39,7 @@ function ensureImportControl() {
   document.documentElement.append(button);
 }
 
-async function startImport(): Promise<MessageResponse> {
+async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise<MessageResponse> {
   if (!isXBookmarkPage(window.location.href)) {
     return { ok: false, error: 'Current page is not an X bookmarks page.' };
   }
@@ -52,6 +52,14 @@ async function startImport(): Promise<MessageResponse> {
   currentImportController = { cancelled: false };
 
   try {
+    if (mode === 'auto-scroll') {
+      await loadMoreBookmarksByScrolling(document, currentImportController, (progress) => {
+        if (control) {
+          control.textContent = `Loading more ${progress.foundCount} found - click to cancel`;
+        }
+      });
+    }
+
     const result = await runImportFromLoadedCards(window.location.href, document, currentImportController, (session) => {
       if (control) {
         const processed = session.insertedCount + session.duplicateCount + session.failedCount;
@@ -94,7 +102,7 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   if (message.type === 'START_X_IMPORT') {
-    startImport().then(sendResponse);
+    startImport(message.mode).then(sendResponse);
     return true;
   }
 

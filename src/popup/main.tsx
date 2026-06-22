@@ -7,24 +7,37 @@ import { Button } from '../components/Button';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import '../styles/globals.css';
 
+function formatImportError(error?: string) {
+  if (!error) {
+    return 'Import failed. Open your X bookmarks page and wait for bookmarks to load.';
+  }
+
+  if (error.includes('Open your X bookmarks page') || error.includes('No active tab')) {
+    return 'No loaded X bookmarks page detected. Open x.com/i/bookmarks, wait for the list to appear, then try Import again.';
+  }
+
+  return error;
+}
+
 function Popup() {
   const [status, setStatus] = useState<string | null>(null);
 
-  async function handleImport() {
-    setStatus('Looking for an open X bookmarks tab...');
+  async function handleImport(mode: 'visible' | 'auto-scroll' = 'visible') {
+    setStatus(mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...');
     const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
-      type: 'START_X_IMPORT'
+      type: 'START_X_IMPORT',
+      mode
     });
 
     if (!response.ok) {
-      setStatus(response.error ?? 'Import failed.');
+      setStatus(formatImportError(response.error));
       return;
     }
 
     const session = response.data?.session;
     setStatus(
       session
-        ? `Imported ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
+        ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
         : 'Import started.'
     );
   }
@@ -40,9 +53,13 @@ function Popup() {
           <ExternalLink size={16} />
           Open BookmarkNest
         </Button>
-        <Button onClick={() => void handleImport()}>
+        <Button onClick={() => void handleImport('visible')}>
           <Upload size={16} />
-          Import from X
+          Import visible
+        </Button>
+        <Button onClick={() => void handleImport('auto-scroll')}>
+          <Upload size={16} />
+          Import more
         </Button>
         <Button variant="ghost" onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}>
           Upgrade / Manage License

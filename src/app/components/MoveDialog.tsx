@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 
 import { Button } from '../../components/Button';
+import { Dialog } from '../../components/Dialog';
+import { Field, SelectInput, TextInput } from '../../components/Field';
 import type { Folder } from '../../shared/types';
 
 interface MoveDialogProps {
@@ -39,22 +41,23 @@ export function MoveDialog({ folders, open, itemCount, onClose, onMove, onCreate
   }
 
   return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/30 px-4">
-      <div className="w-full max-w-sm rounded-app border border-border bg-surface p-4 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold">Move bookmark{itemCount > 1 ? 's' : ''}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{itemCount} selected</p>
-          </div>
-          <button className="rounded-app px-2 py-1 text-sm text-muted-foreground hover:bg-muted" onClick={onClose}>
-            Close
-          </button>
-        </div>
-
-        <label className="mt-4 block text-sm">
-          <span className="text-muted-foreground">Folder</span>
-          <select
-            className="mt-1 h-10 w-full rounded-app border border-border bg-background px-3 outline-none"
+    <Dialog
+      open={open}
+      title={`Move bookmark${itemCount > 1 ? 's' : ''}`}
+      description={`${itemCount} selected. Choose an existing folder or create a new one.`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button variant="primary" onClick={handleMove} disabled={selectedFolderId === '__new__' && !newFolderName.trim()}>
+            Move
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label="Destination">
+          <SelectInput
             value={selectedFolderId}
             onChange={(event) => setSelectedFolderId(event.target.value)}
           >
@@ -65,28 +68,19 @@ export function MoveDialog({ folders, open, itemCount, onClose, onMove, onCreate
               </option>
             ))}
             <option value="__new__">Create new folder...</option>
-          </select>
-        </label>
+          </SelectInput>
+        </Field>
 
         {selectedFolderId === '__new__' ? (
-          <label className="mt-3 block text-sm">
-            <span className="text-muted-foreground">New folder name</span>
-            <input
-              className="mt-1 h-10 w-full rounded-app border border-border bg-background px-3 outline-none"
+          <Field label="New folder name" hint="The folder will be created locally in BookmarkNest.">
+            <TextInput
               value={newFolderName}
               onChange={(event) => setNewFolderName(event.target.value)}
               autoFocus
             />
-          </label>
+          </Field>
         ) : null}
-
-        <div className="mt-5 flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={handleMove} disabled={selectedFolderId === '__new__' && !newFolderName.trim()}>
-            Move
-          </Button>
-        </div>
       </div>
-    </div>
+    </Dialog>
   );
 }

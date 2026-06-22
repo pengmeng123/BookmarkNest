@@ -10,6 +10,13 @@ export interface ImportController {
   cancelled: boolean;
 }
 
+export interface AutoScrollOptions {
+  maxScrolls?: number;
+  idleRounds?: number;
+  waitMs?: number;
+  scrollBy?: number;
+}
+
 function createId(prefix: string) {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}_${globalThis.crypto.randomUUID()}`;
@@ -72,4 +79,46 @@ export async function runImportFromLoadedCards(
   onProgress?.({ ...session });
 
   return { session };
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+export async function loadMoreBookmarksByScrolling(
+  root: ParentNode = document,
+  controller?: ImportController,
+  onProgress?: (progress: { scrolls: number; foundCount: number; idleRounds: number }) => void,
+  options: AutoScrollOptions = {}
+) {
+  const maxScrolls = options.maxScrolls ?? 30;
+  const maxIdleRounds = options.idleRounds ?? 4;
+  const waitMs = options.waitMs ?? 1400;
+  const scrollBy = options.scrollBy ?? Math.max(700, Math.floor(window.innerHeight * 0.85));
+  let lastFoundCount = parseLoadedBookmarkCards(root).foundCount;
+  let idleRounds = 0;
+
+  onProgress?.({ scrolls: 0, foundCount: lastFoundCount, idleRounds });
+
+  for (let scrolls = 1; scrolls <= maxScrolls; scrolls += 1) {
+    if (controller?.cancelled) {
+      break;
+    }
+
+    window.scrollBy({ top: scrollBy, behavior: 'smooth' });
+    await sleep(waitMs);
+
+    const foundCount = parseLoadedBookmarkCards(root).foundCount;
+    idleRounds = foundCount > lastFoundCount ? 0 : idleRounds + 1;
+    lastFoundCount = Math.max(lastFoundCount, foundCount);
+    onProgress?.({ scrolls, foundCount, idleRounds });
+
+    if (idleRounds >= maxIdleRounds) {
+      break;
+    }
+  }
+
+  return { foundCount: lastFoundCount };
 }

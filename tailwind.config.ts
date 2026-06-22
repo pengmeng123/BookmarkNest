@@ -13,7 +13,9 @@ export default {
         'muted-foreground': 'hsl(var(--muted-foreground))',
         primary: 'hsl(var(--primary))',
         'primary-foreground': 'hsl(var(--primary-foreground))',
-        surface: 'hsl(var(--surface))'
+        surface: 'hsl(var(--surface))',
+        accent: 'hsl(var(--accent))',
+        danger: 'hsl(var(--danger))'
       },
       borderRadius: {
         app: '8px'

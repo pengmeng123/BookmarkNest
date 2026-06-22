@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runImportFromLoadedCards } from './importRunner';
+import { loadMoreBookmarksByScrolling, runImportFromLoadedCards } from './importRunner';
 
 function render(html: string) {
   const root = document.createElement('div');
@@ -133,5 +133,33 @@ describe('runImportFromLoadedCards', () => {
     expect(session.status).toBe('cancelled');
     expect(session.insertedCount).toBe(0);
     expect(progressStatuses).toContain('running');
+  });
+
+  it('scrolls until loaded bookmark count stops changing', async () => {
+    vi.useFakeTimers();
+    const root = render(card('1'));
+    const scrollBy = vi.fn(() => {
+      if (!root.innerHTML.includes('status/2')) {
+        root.insertAdjacentHTML('beforeend', card('2'));
+      }
+    });
+    vi.stubGlobal('scrollBy', scrollBy);
+    vi.stubGlobal('innerHeight', 1000);
+    const progressCounts: number[] = [];
+
+    const promise = loadMoreBookmarksByScrolling(
+      root,
+      undefined,
+      (progress) => progressCounts.push(progress.foundCount),
+      { maxScrolls: 5, idleRounds: 2, waitMs: 10, scrollBy: 500 }
+    );
+
+    await vi.runAllTimersAsync();
+    const result = await promise;
+    vi.useRealTimers();
+
+    expect(scrollBy).toHaveBeenCalled();
+    expect(result.foundCount).toBe(2);
+    expect(progressCounts).toContain(2);
   });
 });

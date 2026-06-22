@@ -86,7 +86,7 @@ export interface LicenseData {
 export type ExtensionMessage =
   | { type: 'OPEN_APP' }
   | { type: 'OPEN_UPGRADE' }
-  | { type: 'START_X_IMPORT' }
+  | { type: 'START_X_IMPORT'; mode?: 'visible' | 'auto-scroll' }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }
   | { type: 'GET_ACTIVE_TAB_IMPORT_STATE' };
 
