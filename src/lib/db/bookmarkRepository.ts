@@ -50,6 +50,7 @@ export async function upsertBookmark(input: BookmarkInput) {
       mediaUrls: input.mediaUrls ?? [],
       createdAtText: input.createdAtText,
       createdAt: input.createdAt,
+      sourceOrder: input.sourceOrder ?? existing.sourceOrder,
       updatedAt: now,
       deleted: false,
       deletedAt: undefined,
@@ -74,6 +75,7 @@ export async function upsertBookmark(input: BookmarkInput) {
     mediaUrls: input.mediaUrls ?? [],
     createdAtText: input.createdAtText,
     createdAt: input.createdAt,
+    sourceOrder: input.sourceOrder,
     importedAt: now,
     updatedAt: now,
     tagIds: [],
@@ -236,6 +238,20 @@ export interface BookmarkListItem extends Bookmark {
   locked: boolean;
 }
 
+function compareBookmarksBySourceOrder(left: Bookmark, right: Bookmark) {
+  const leftOrder = left.sourceOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.sourceOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  if (left.importedAt !== right.importedAt) {
+    return right.importedAt - left.importedAt;
+  }
+
+  return right.id.localeCompare(left.id);
+}
+
 export async function listBookmarkItems(filters: BookmarkListFilters = {}): Promise<BookmarkListItem[]> {
   const [bookmarks, folders, tags, manageableIds] = await Promise.all([
     db.bookmarks.toArray(),
@@ -259,7 +275,7 @@ export async function listBookmarkItems(filters: BookmarkListFilters = {}): Prom
       return true;
     })
     .filter((bookmark) => (filters.tagId ? bookmark.tagIds.includes(filters.tagId) : true))
-    .sort((left, right) => right.importedAt - left.importedAt)
+    .sort(compareBookmarksBySourceOrder)
     .map((bookmark) => ({
       ...bookmark,
       folder: bookmark.folderId ? folderById.get(bookmark.folderId) : undefined,

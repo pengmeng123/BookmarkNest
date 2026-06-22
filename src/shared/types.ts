@@ -12,6 +12,7 @@ export interface Bookmark {
   createdAtText?: string;
   createdAt?: number;
   importedAt: number;
+  sourceOrder?: number;
   updatedAt: number;
   folderId?: string;
   tagIds: string[];
@@ -106,5 +107,6 @@ export interface BookmarkInput {
   mediaUrls?: string[];
   createdAtText?: string;
   createdAt?: number;
+  sourceOrder?: number;
   source: BookmarkSource;
 }
