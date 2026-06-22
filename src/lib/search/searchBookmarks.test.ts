@@ -50,7 +50,17 @@ describe('searchBookmarks', () => {
     expect(searchBookmarks(bookmarks, 'ai startup').map((match) => match.bookmark.id)).toEqual(['one']);
   });
 
-  it('orders results by imported time descending', () => {
+  it('orders results by X page visual order', () => {
+    const bookmarks = [
+      item({ id: 'middle', sourceOrder: 1, importedAt: 1 }),
+      item({ id: 'top', sourceOrder: 0, importedAt: 3 }),
+      item({ id: 'bottom', sourceOrder: 2, importedAt: 2 })
+    ];
+
+    expect(searchBookmarks(bookmarks, '').map((match) => match.bookmark.id)).toEqual(['top', 'middle', 'bottom']);
+  });
+
+  it('falls back to imported time when X page order is missing', () => {
     const bookmarks = [item({ id: 'old', importedAt: 1 }), item({ id: 'new', importedAt: 3 }), item({ id: 'middle', importedAt: 2 })];
 
     expect(searchBookmarks(bookmarks, '').map((match) => match.bookmark.id)).toEqual(['new', 'middle', 'old']);

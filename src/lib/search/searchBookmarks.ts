@@ -22,6 +22,20 @@ function buildSearchText(bookmark: BookmarkListItem) {
     .toLowerCase();
 }
 
+function compareBySourceOrder(left: BookmarkListItem, right: BookmarkListItem) {
+  const leftOrder = left.sourceOrder ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = right.sourceOrder ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+
+  if (left.importedAt !== right.importedAt) {
+    return right.importedAt - left.importedAt;
+  }
+
+  return right.id.localeCompare(left.id);
+}
+
 export function tokenizeSearchQuery(query: string) {
   return query
     .split(/\s+/)
@@ -35,7 +49,7 @@ export function searchBookmarks(bookmarks: BookmarkListItem[], query: string): S
   if (terms.length === 0) {
     return bookmarks
       .slice()
-      .sort((left, right) => right.importedAt - left.importedAt)
+      .sort(compareBySourceOrder)
       .map((bookmark) => ({ bookmark, matchedTerms: [] }));
   }
 
@@ -44,6 +58,6 @@ export function searchBookmarks(bookmarks: BookmarkListItem[], query: string): S
       const searchText = buildSearchText(bookmark);
       return terms.every((term) => searchText.includes(term));
     })
-    .sort((left, right) => right.importedAt - left.importedAt)
+    .sort(compareBySourceOrder)
     .map((bookmark) => ({ bookmark, matchedTerms: terms }));
 }

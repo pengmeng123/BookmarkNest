@@ -27,6 +27,15 @@ export class BookmarkNestDatabase extends Dexie {
       importSessions: '&id, startedAt, finishedAt, status',
       searchMetadata: '&id, bookmarkId, updatedAt'
     });
+
+    this.version(2).stores({
+      bookmarks:
+        '&id, &dedupeKey, tweetId, tweetUrl, authorHandle, importedAt, sourceOrder, updatedAt, folderId, archived, deleted, [deleted+archived+sourceOrder]',
+      folders: '&id, name, sortOrder, createdAt, updatedAt',
+      tags: '&id, &name, color, usageCount, createdAt, updatedAt',
+      importSessions: '&id, startedAt, finishedAt, status',
+      searchMetadata: '&id, bookmarkId, updatedAt'
+    });
   }
 }
 

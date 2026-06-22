@@ -31,6 +31,47 @@ describe('saveImportedBookmarks', () => {
     expect(await db.bookmarks.count()).toBe(1);
   });
 
+  it('stores the visual order from the X bookmarks page', async () => {
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [
+        { ...bookmark, tweetId: 'top', tweetUrl: 'https://x.com/user/status/top' },
+        { ...bookmark, tweetId: 'bottom', tweetUrl: 'https://x.com/user/status/bottom' }
+      ],
+      foundCount: 2,
+      failedCount: 0
+    });
+
+    const stored = await db.bookmarks.orderBy('sourceOrder').toArray();
+    expect(stored.map((item) => item.tweetId)).toEqual(['top', 'bottom']);
+    expect(stored.map((item) => item.sourceOrder)).toEqual([0, 1]);
+  });
+
+  it('refreshes the visual order for duplicates on later imports', async () => {
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [
+        { ...bookmark, tweetId: 'first', tweetUrl: 'https://x.com/user/status/first' },
+        { ...bookmark, tweetId: 'second', tweetUrl: 'https://x.com/user/status/second' }
+      ],
+      foundCount: 2,
+      failedCount: 0
+    });
+
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [
+        { ...bookmark, tweetId: 'second', tweetUrl: 'https://x.com/user/status/second' },
+        { ...bookmark, tweetId: 'first', tweetUrl: 'https://x.com/user/status/first' }
+      ],
+      foundCount: 2,
+      failedCount: 0
+    });
+
+    const stored = await db.bookmarks.orderBy('sourceOrder').toArray();
+    expect(stored.map((item) => item.tweetId)).toEqual(['second', 'first']);
+  });
+
   it('counts duplicates without creating new records', async () => {
     await upsertBookmark(bookmark);
 

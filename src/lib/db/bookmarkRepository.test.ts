@@ -148,6 +148,16 @@ describe('bookmarkRepository', () => {
     expect(archivedItems.map((item) => item.id)).toEqual([archived.bookmark.id]);
   });
 
+  it('lists bookmark items by X page visual order', async () => {
+    const middle = await upsertBookmark({ ...bookmarkInput(1), sourceOrder: 1 });
+    const top = await upsertBookmark({ ...bookmarkInput(2), sourceOrder: 0 });
+    const bottom = await upsertBookmark({ ...bookmarkInput(3), sourceOrder: 2 });
+
+    const items = await listBookmarkItems({ isPro: true });
+
+    expect(items.map((item) => item.id)).toEqual([top.bookmark.id, middle.bookmark.id, bottom.bookmark.id]);
+  });
+
   it('filters bookmark items by folder and tag', async () => {
     const first = await upsertBookmark(bookmarkInput(1));
     const second = await upsertBookmark(bookmarkInput(2));
