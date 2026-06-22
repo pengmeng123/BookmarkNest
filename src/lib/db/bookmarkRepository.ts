@@ -22,12 +22,23 @@ export function createDedupeKey(input: Pick<BookmarkInput, 'tweetId' | 'tweetUrl
   return `hash:${input.authorHandle.trim().toLowerCase()}::${input.contentText.trim().toLowerCase()}`;
 }
 
+async function recalculateTagUsage(tagIds: string[]) {
+  const uniqueTagIds = Array.from(new Set(tagIds));
+  await Promise.all(
+    uniqueTagIds.map(async (tagId) => {
+      const usageCount = await db.bookmarks.filter((bookmark) => !bookmark.deleted && bookmark.tagIds.includes(tagId)).count();
+      await db.tags.update(tagId, { usageCount, updatedAt: Date.now() });
+    })
+  );
+}
+
 export async function upsertBookmark(input: BookmarkInput) {
   const now = Date.now();
   const dedupeKey = createDedupeKey(input);
   const existing = await db.bookmarks.where('dedupeKey').equals(dedupeKey).first();
 
   if (existing) {
+    const wasDeleted = existing.deleted;
     const updated: Bookmark = {
       ...existing,
       tweetId: input.tweetId ?? existing.tweetId,
@@ -40,11 +51,16 @@ export async function upsertBookmark(input: BookmarkInput) {
       createdAtText: input.createdAtText,
       createdAt: input.createdAt,
       updatedAt: now,
+      deleted: false,
+      deletedAt: undefined,
       source: input.source
     };
 
     await db.bookmarks.put(updated);
-    return { bookmark: updated, inserted: false, restored: false };
+    if (wasDeleted) {
+      await recalculateTagUsage(updated.tagIds);
+    }
+    return { bookmark: updated, inserted: false, restored: wasDeleted };
   }
 
   const bookmark: Bookmark = {
@@ -72,10 +88,18 @@ export async function upsertBookmark(input: BookmarkInput) {
 }
 
 export async function softDeleteBookmark(bookmarkId: string) {
-  await db.bookmarks.update(bookmarkId, {
-    deleted: true,
-    deletedAt: Date.now(),
-    updatedAt: Date.now()
+  await db.transaction('rw', db.bookmarks, db.tags, async () => {
+    const bookmark = await db.bookmarks.get(bookmarkId);
+    if (!bookmark || bookmark.deleted) {
+      return;
+    }
+
+    await db.bookmarks.update(bookmarkId, {
+      deleted: true,
+      deletedAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    await recalculateTagUsage(bookmark.tagIds);
   });
 }
 
@@ -165,8 +189,7 @@ export async function addTagToBookmarks(bookmarkIds: string[], tagId: string) {
     });
 
     if (changed > 0) {
-      const usageCount = await db.bookmarks.filter((bookmark) => !bookmark.deleted && bookmark.tagIds.includes(tagId)).count();
-      await db.tags.update(tagId, { usageCount, updatedAt: Date.now() });
+      await recalculateTagUsage([tagId]);
     }
   });
 }
@@ -177,8 +200,7 @@ export async function removeTagFromBookmark(bookmarkId: string, tagId: string) {
       bookmark.tagIds = bookmark.tagIds.filter((id) => id !== tagId);
       bookmark.updatedAt = Date.now();
     });
-    const usageCount = await db.bookmarks.filter((bookmark) => !bookmark.deleted && bookmark.tagIds.includes(tagId)).count();
-    await db.tags.update(tagId, { usageCount, updatedAt: Date.now() });
+    await recalculateTagUsage([tagId]);
   });
 }
 
@@ -251,5 +273,7 @@ export async function listFolders() {
 }
 
 export async function listTags() {
+  const tags = await db.tags.orderBy('name').toArray();
+  await recalculateTagUsage(tags.map((tag) => tag.id));
   return db.tags.orderBy('name').toArray();
 }

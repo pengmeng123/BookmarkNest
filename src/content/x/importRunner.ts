@@ -1,6 +1,6 @@
 import type { ImportSession } from '../../shared/types';
 import type { MessageResponse } from '../../shared/types';
-import { parseLoadedBookmarkCards } from './parser';
+import { parseLoadedBookmarkCards, type ParsedBookmarkCard } from './parser';
 
 export interface ImportRunResult {
   session: ImportSession;
@@ -13,6 +13,7 @@ export interface ImportController {
 export interface AutoScrollOptions {
   maxScrolls?: number;
   idleRounds?: number;
+  minScrolls?: number;
   waitMs?: number;
   scrollBy?: number;
 }
@@ -87,38 +88,162 @@ function sleep(ms: number) {
   });
 }
 
+function getScrollTop() {
+  return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+}
+
+function getMaxScrollTop() {
+  const scrollingElement = document.scrollingElement ?? document.documentElement;
+  return Math.max(0, scrollingElement.scrollHeight - window.innerHeight);
+}
+
+function collectLoadedBookmarkKeys(root: ParentNode = document) {
+  return new Set(
+    parseLoadedBookmarkCards(root).parsed.map((card) => card.input.tweetId ?? card.input.tweetUrl).filter(Boolean)
+  );
+}
+
+function collectParsedBookmarks(root: ParentNode, collected: Map<string, ParsedBookmarkCard>) {
+  const parsed = parseLoadedBookmarkCards(root);
+  for (const card of parsed.parsed) {
+    const key = card.input.tweetId ?? card.input.tweetUrl;
+    if (key) {
+      collected.set(key, card);
+    }
+  }
+  return parsed;
+}
+
+async function saveCollectedBookmarks(sourceUrl: string, collected: Map<string, ParsedBookmarkCard>, failedCount: number) {
+  const response = await chrome.runtime.sendMessage({
+    type: 'SAVE_IMPORTED_BOOKMARKS',
+    payload: {
+      sourceUrl,
+      bookmarks: Array.from(collected.values()).map((card) => card.input),
+      foundCount: collected.size + failedCount,
+      failedCount
+    }
+  });
+  const saveResponse = response as MessageResponse<ImportRunResult>;
+  if (!saveResponse.ok || !saveResponse.data) {
+    throw new Error(saveResponse.error ?? 'Unable to save imported bookmarks.');
+  }
+  return saveResponse.data;
+}
+
 export async function loadMoreBookmarksByScrolling(
   root: ParentNode = document,
   controller?: ImportController,
-  onProgress?: (progress: { scrolls: number; foundCount: number; idleRounds: number }) => void,
+  onProgress?: (progress: { scrolls: number; foundCount: number; uniqueCount: number; idleRounds: number }) => void,
   options: AutoScrollOptions = {}
 ) {
   const maxScrolls = options.maxScrolls ?? 30;
-  const maxIdleRounds = options.idleRounds ?? 4;
-  const waitMs = options.waitMs ?? 1400;
+  const maxIdleRounds = options.idleRounds ?? 5;
+  const minScrolls = options.minScrolls ?? 6;
+  const waitMs = options.waitMs ?? 1800;
   const scrollBy = options.scrollBy ?? Math.max(700, Math.floor(window.innerHeight * 0.85));
-  let lastFoundCount = parseLoadedBookmarkCards(root).foundCount;
+  const seenKeys = collectLoadedBookmarkKeys(root);
+  let lastScrollTop = getScrollTop();
+  let lastFoundCount = seenKeys.size;
   let idleRounds = 0;
 
-  onProgress?.({ scrolls: 0, foundCount: lastFoundCount, idleRounds });
+  onProgress?.({ scrolls: 0, foundCount: parseLoadedBookmarkCards(root).foundCount, uniqueCount: seenKeys.size, idleRounds });
 
   for (let scrolls = 1; scrolls <= maxScrolls; scrolls += 1) {
     if (controller?.cancelled) {
       break;
     }
 
-    window.scrollBy({ top: scrollBy, behavior: 'smooth' });
+    window.scrollBy({ top: scrollBy, behavior: 'auto' });
     await sleep(waitMs);
 
-    const foundCount = parseLoadedBookmarkCards(root).foundCount;
-    idleRounds = foundCount > lastFoundCount ? 0 : idleRounds + 1;
-    lastFoundCount = Math.max(lastFoundCount, foundCount);
-    onProgress?.({ scrolls, foundCount, idleRounds });
+    const parsed = parseLoadedBookmarkCards(root);
+    for (const card of parsed.parsed) {
+      const key = card.input.tweetId ?? card.input.tweetUrl;
+      if (key) {
+        seenKeys.add(key);
+      }
+    }
 
-    if (idleRounds >= maxIdleRounds) {
+    const scrollTop = getScrollTop();
+    const maxScrollTop = getMaxScrollTop();
+    const moved = Math.abs(scrollTop - lastScrollTop) > 24;
+    const discoveredNewBookmark = seenKeys.size > lastFoundCount;
+    const nearBottom = maxScrollTop > 0 && maxScrollTop - scrollTop < 32;
+    idleRounds = discoveredNewBookmark || moved ? 0 : idleRounds + 1;
+    lastFoundCount = Math.max(lastFoundCount, seenKeys.size);
+    lastScrollTop = scrollTop;
+    onProgress?.({ scrolls, foundCount: parsed.foundCount, uniqueCount: seenKeys.size, idleRounds });
+
+    if (scrolls >= minScrolls && (idleRounds >= maxIdleRounds || (nearBottom && !discoveredNewBookmark && !moved))) {
       break;
     }
   }
 
   return { foundCount: lastFoundCount };
+}
+
+export async function runImportWithAutoScroll(
+  sourceUrl: string,
+  root: ParentNode = document,
+  controller?: ImportController,
+  onProgress?: (progress: { scrolls: number; foundCount: number; uniqueCount: number; idleRounds: number }) => void,
+  options: AutoScrollOptions = {}
+): Promise<ImportRunResult> {
+  const maxScrolls = options.maxScrolls ?? 30;
+  const maxIdleRounds = options.idleRounds ?? 5;
+  const minScrolls = options.minScrolls ?? 6;
+  const waitMs = options.waitMs ?? 1800;
+  const scrollBy = options.scrollBy ?? Math.max(700, Math.floor(window.innerHeight * 0.85));
+  const collected = new Map<string, ParsedBookmarkCard>();
+  let failedCount = 0;
+  let lastScrollTop = getScrollTop();
+  let lastUniqueCount = 0;
+  let idleRounds = 0;
+
+  const initial = collectParsedBookmarks(root, collected);
+  failedCount += initial.failedCount;
+  lastUniqueCount = collected.size;
+  onProgress?.({ scrolls: 0, foundCount: initial.foundCount, uniqueCount: collected.size, idleRounds });
+
+  for (let scrolls = 1; scrolls <= maxScrolls; scrolls += 1) {
+    if (controller?.cancelled) {
+      const now = Date.now();
+      return {
+        session: {
+          id: createId('import'),
+          startedAt: now,
+          finishedAt: now,
+          sourceUrl,
+          foundCount: collected.size + failedCount,
+          insertedCount: 0,
+          updatedCount: 0,
+          duplicateCount: 0,
+          failedCount,
+          status: 'cancelled'
+        }
+      };
+    }
+
+    window.scrollBy({ top: scrollBy, behavior: 'auto' });
+    await sleep(waitMs);
+
+    const parsed = collectParsedBookmarks(root, collected);
+    failedCount += parsed.failedCount;
+    const scrollTop = getScrollTop();
+    const maxScrollTop = getMaxScrollTop();
+    const moved = Math.abs(scrollTop - lastScrollTop) > 24;
+    const discoveredNewBookmark = collected.size > lastUniqueCount;
+    const nearBottom = maxScrollTop > 0 && maxScrollTop - scrollTop < 32;
+    idleRounds = discoveredNewBookmark || moved ? 0 : idleRounds + 1;
+    lastUniqueCount = Math.max(lastUniqueCount, collected.size);
+    lastScrollTop = scrollTop;
+    onProgress?.({ scrolls, foundCount: parsed.foundCount, uniqueCount: collected.size, idleRounds });
+
+    if (scrolls >= minScrolls && (idleRounds >= maxIdleRounds || (nearBottom && !discoveredNewBookmark && !moved))) {
+      break;
+    }
+  }
+
+  return saveCollectedBookmarks(sourceUrl, collected, failedCount);
 }

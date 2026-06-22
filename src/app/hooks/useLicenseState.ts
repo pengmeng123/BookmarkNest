@@ -5,11 +5,26 @@ import { validateStoredLicenseIfNeeded } from '../../lib/license/service';
 import { emptyLicenseData } from '../../lib/storage/localStorage';
 import type { LicenseData } from '../../shared/types';
 
+const forcePro = import.meta.env.VITE_FORCE_PRO === 'true';
+
 export function useLicenseState() {
-  const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
-  const [loading, setLoading] = useState(true);
+  const forcedLicense: LicenseData = {
+    ...emptyLicenseData,
+    pro: true,
+    licenseKey: 'dev-pro',
+    email: 'dev@bookmarknest.local',
+    activatedAt: new Date(0).toISOString(),
+    lastValidatedAt: new Date(0).toISOString(),
+    validationStatus: 'valid'
+  };
+  const [license, setLicense] = useState<LicenseData>(forcePro ? forcedLicense : emptyLicenseData);
+  const [loading, setLoading] = useState(!forcePro);
 
   useEffect(() => {
+    if (forcePro) {
+      return;
+    }
+
     let mounted = true;
 
     validateStoredLicenseIfNeeded()
@@ -32,6 +47,6 @@ export function useLicenseState() {
   return {
     license,
     loading,
-    isPro: isProActive(license)
+    isPro: forcePro || isProActive(license)
   };
 }

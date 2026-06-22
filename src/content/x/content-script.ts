@@ -1,40 +1,111 @@
 import type { ExtensionMessage, MessageResponse } from '../../shared/types';
-import { loadMoreBookmarksByScrolling, runImportFromLoadedCards } from './importRunner';
+import { runImportFromLoadedCards, runImportWithAutoScroll } from './importRunner';
 import { isXBookmarkPage } from './pageDetection';
 
 const CONTROL_ID = 'bookmarknest-import-control';
+const CONTROL_STYLE_ID = 'bookmarknest-import-control-style';
+const CONTROL_VERSION = 'auto-scroll-v3';
 let currentImportController: { cancelled: boolean } | null = null;
 
-function ensureImportControl() {
-  if (!isXBookmarkPage(window.location.href) || document.getElementById(CONTROL_ID)) {
+function ensureControlStyle() {
+  if (document.getElementById(CONTROL_STYLE_ID)) {
     return;
   }
+
+  const style = document.createElement('style');
+  style.id = CONTROL_STYLE_ID;
+  style.textContent = `
+    #${CONTROL_ID}[data-loading="true"] > span {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.45);
+      border-top-color: #fff;
+      border-radius: 999px;
+      animation: bookmarknest-spin 0.75s linear infinite;
+      flex: 0 0 auto;
+    }
+
+    @keyframes bookmarknest-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 720px) {
+      #${CONTROL_ID} {
+        right: 76px !important;
+        bottom: 16px !important;
+        max-width: 160px !important;
+      }
+    }
+  `;
+  document.documentElement.append(style);
+}
+
+function setControlLoading(button: HTMLElement, loading: boolean) {
+  button.toggleAttribute('aria-busy', loading);
+  button.dataset.loading = loading ? 'true' : 'false';
+}
+
+function setControlText(button: HTMLElement, text: string, loading = false) {
+  button.replaceChildren();
+  if (loading) {
+    const spinner = document.createElement('span');
+    spinner.setAttribute('aria-hidden', 'true');
+    button.append(spinner);
+  }
+  button.append(document.createTextNode(text));
+  setControlLoading(button, loading);
+}
+
+function ensureImportControl() {
+  if (!isXBookmarkPage(window.location.href)) {
+    document.getElementById(CONTROL_ID)?.remove();
+    return;
+  }
+
+  const existingControl = document.getElementById(CONTROL_ID);
+  if (existingControl instanceof HTMLButtonElement && existingControl.dataset.version === CONTROL_VERSION) {
+    return;
+  }
+
+  existingControl?.remove();
+  ensureControlStyle();
 
   const button = document.createElement('button');
   button.id = CONTROL_ID;
   button.type = 'button';
-  button.textContent = 'Import to BookmarkNest';
+  button.dataset.version = CONTROL_VERSION;
+  setControlText(button, 'Import more');
+  button.setAttribute('aria-label', 'Import more X bookmarks to BookmarkNest');
   button.style.position = 'fixed';
-  button.style.right = '20px';
-  button.style.bottom = '20px';
+  button.style.right = '92px';
+  button.style.bottom = '18px';
   button.style.zIndex = '2147483647';
   button.style.border = '0';
-  button.style.borderRadius = '8px';
-  button.style.padding = '10px 14px';
+  button.style.borderRadius = '999px';
+  button.style.padding = '9px 12px';
   button.style.background = '#14786f';
   button.style.color = '#fff';
+  button.style.display = 'inline-flex';
+  button.style.alignItems = 'center';
+  button.style.gap = '8px';
+  button.style.minHeight = '38px';
+  button.style.maxWidth = '210px';
+  button.style.whiteSpace = 'nowrap';
   button.style.font = '600 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  button.style.boxShadow = '0 8px 22px rgba(0, 0, 0, 0.22)';
-  button.addEventListener('click', () => {
+  button.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.18)';
+  button.style.cursor = 'pointer';
+  button.onclick = () => {
     if (currentImportController) {
       currentImportController.cancelled = true;
-      button.textContent = 'Cancelling...';
+      setControlText(button, 'Cancelling...', true);
       return;
     }
 
-    button.textContent = 'Import starting...';
-    void startImport();
-  });
+    setControlText(button, 'Starting...', true);
+    void startImport('auto-scroll');
+  };
 
   document.documentElement.append(button);
 }
@@ -46,41 +117,57 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
 
   const control = document.getElementById(CONTROL_ID);
   if (control) {
-    control.textContent = 'Importing...';
+    setControlText(control, 'Importing...', true);
   }
 
   currentImportController = { cancelled: false };
 
   try {
     if (mode === 'auto-scroll') {
-      await loadMoreBookmarksByScrolling(document, currentImportController, (progress) => {
+      const result = await runImportWithAutoScroll(window.location.href, document, currentImportController, (progress) => {
         if (control) {
-          control.textContent = `Loading more ${progress.foundCount} found - click to cancel`;
+          setControlText(control, `Loading ${progress.uniqueCount} found`, true);
         }
       });
+
+      if (control) {
+        setControlText(
+          control,
+          result.session.status === 'cancelled'
+            ? `Cancelled: ${result.session.insertedCount} saved`
+            : `Imported ${result.session.insertedCount} bookmarks`
+        );
+      }
+
+      return { ok: true, data: { status: result.session.status, ...result } };
     }
 
     const result = await runImportFromLoadedCards(window.location.href, document, currentImportController, (session) => {
       if (control) {
         const processed = session.insertedCount + session.duplicateCount + session.failedCount;
-        control.textContent =
+        setControlText(
+          control,
           session.status === 'running'
             ? `Importing ${processed}/${session.foundCount} - click to cancel`
-            : `${session.status}: ${session.insertedCount} new, ${session.duplicateCount} duplicate`;
+            : `${session.status}: ${session.insertedCount} new, ${session.duplicateCount} duplicate`,
+          session.status === 'running'
+        );
       }
     });
 
     if (control) {
-      control.textContent =
+      setControlText(
+        control,
         result.session.status === 'cancelled'
           ? `Cancelled: ${result.session.insertedCount} saved`
-          : `Imported ${result.session.insertedCount} bookmarks`;
+          : `Imported ${result.session.insertedCount} bookmarks`
+      );
     }
 
     return { ok: true, data: { status: result.session.status, ...result } };
   } catch {
     if (control) {
-      control.textContent = 'Import failed';
+      setControlText(control, 'Import failed');
     }
     return { ok: false, error: 'Unable to import the current X bookmarks page.' };
   } finally {

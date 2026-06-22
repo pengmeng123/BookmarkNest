@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { loadMoreBookmarksByScrolling, runImportFromLoadedCards } from './importRunner';
+import { loadMoreBookmarksByScrolling, runImportFromLoadedCards, runImportWithAutoScroll } from './importRunner';
 
 function render(html: string) {
   const root = document.createElement('div');
@@ -135,31 +135,101 @@ describe('runImportFromLoadedCards', () => {
     expect(progressStatuses).toContain('running');
   });
 
-  it('scrolls until loaded bookmark count stops changing', async () => {
+  it('keeps scrolling when the virtualized DOM count stays flat', async () => {
     vi.useFakeTimers();
     const root = render(card('1'));
+    let scrollTop = 0;
     const scrollBy = vi.fn(() => {
-      if (!root.innerHTML.includes('status/2')) {
-        root.insertAdjacentHTML('beforeend', card('2'));
-      }
+      scrollTop += 500;
+      root.innerHTML = card(String(Math.floor(scrollTop / 500) + 1));
     });
     vi.stubGlobal('scrollBy', scrollBy);
     vi.stubGlobal('innerHeight', 1000);
+    vi.stubGlobal('scrollY', 0);
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => scrollTop
+    });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      get: () => 10000
+    });
     const progressCounts: number[] = [];
 
     const promise = loadMoreBookmarksByScrolling(
       root,
       undefined,
-      (progress) => progressCounts.push(progress.foundCount),
-      { maxScrolls: 5, idleRounds: 2, waitMs: 10, scrollBy: 500 }
+      (progress) => progressCounts.push(progress.uniqueCount),
+      { maxScrolls: 5, minScrolls: 4, idleRounds: 2, waitMs: 10, scrollBy: 500 }
     );
 
     await vi.runAllTimersAsync();
     const result = await promise;
     vi.useRealTimers();
 
-    expect(scrollBy).toHaveBeenCalled();
-    expect(result.foundCount).toBe(2);
-    expect(progressCounts).toContain(2);
+    expect(scrollBy).toHaveBeenCalledTimes(5);
+    expect(result.foundCount).toBe(6);
+    expect(progressCounts).toContain(6);
+  });
+
+  it('imports every bookmark seen while auto-scrolling a virtualized list', async () => {
+    vi.useFakeTimers();
+    const root = render(card('1'));
+    let scrollTop = 0;
+    const scrollBy = vi.fn(() => {
+      scrollTop += 500;
+      root.innerHTML = card(String(Math.floor(scrollTop / 500) + 1));
+    });
+    const sendMessage = stubSaveResponse({
+      ok: true,
+      data: {
+        session: {
+          id: 'import_1',
+          startedAt: 1,
+          sourceUrl: 'https://x.com/i/bookmarks',
+          foundCount: 6,
+          insertedCount: 6,
+          updatedCount: 0,
+          duplicateCount: 0,
+          failedCount: 0,
+          status: 'completed'
+        }
+      }
+    });
+    vi.stubGlobal('scrollBy', scrollBy);
+    vi.stubGlobal('innerHeight', 1000);
+    Object.defineProperty(window, 'scrollY', {
+      configurable: true,
+      get: () => scrollTop
+    });
+    Object.defineProperty(document.documentElement, 'scrollHeight', {
+      configurable: true,
+      get: () => 10000
+    });
+
+    const promise = runImportWithAutoScroll('https://x.com/i/bookmarks', root, undefined, undefined, {
+      maxScrolls: 5,
+      minScrolls: 4,
+      idleRounds: 2,
+      waitMs: 10,
+      scrollBy: 500
+    });
+
+    await vi.runAllTimersAsync();
+    const { session } = await promise;
+    vi.useRealTimers();
+
+    expect(session.insertedCount).toBe(6);
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          bookmarks: expect.arrayContaining([
+            expect.objectContaining({ tweetId: '1' }),
+            expect.objectContaining({ tweetId: '2' }),
+            expect.objectContaining({ tweetId: '6' })
+          ])
+        })
+      })
+    );
   });
 });

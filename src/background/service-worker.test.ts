@@ -46,11 +46,11 @@ describe('saveImportedBookmarks', () => {
     expect(await db.bookmarks.count()).toBe(1);
   });
 
-  it('does not restore soft-deleted duplicate bookmarks', async () => {
+  it('restores soft-deleted bookmarks when they are imported again', async () => {
     const existing = await upsertBookmark(bookmark);
     await softDeleteBookmark(existing.bookmark.id);
 
-    await saveImportedBookmarks({
+    const response = await saveImportedBookmarks({
       sourceUrl: 'https://x.com/i/bookmarks',
       bookmarks: [bookmark],
       foundCount: 1,
@@ -58,6 +58,8 @@ describe('saveImportedBookmarks', () => {
     });
 
     const stored = await db.bookmarks.get(existing.bookmark.id);
-    expect(stored?.deleted).toBe(true);
+    expect(stored?.deleted).toBe(false);
+    expect(stored?.deletedAt).toBeUndefined();
+    expect(response.data?.session.insertedCount).toBe(1);
   });
 });

@@ -57,7 +57,7 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
   for (const bookmark of payload.bookmarks) {
     try {
       const result = await upsertBookmark(bookmark);
-      if (result.inserted) {
+      if (result.inserted || result.restored) {
         session.insertedCount += 1;
       } else {
         session.duplicateCount += 1;

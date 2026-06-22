@@ -5,6 +5,7 @@ import {
   FileSpreadsheet,
   Folder,
   Inbox,
+  LoaderCircle,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -332,6 +333,7 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
+  const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
   const [moveTargetIds, setMoveTargetIds] = useState<string[] | null>(null);
   const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
@@ -547,30 +549,39 @@ function App() {
   }
 
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'visible') {
+    if (importMode) {
+      return;
+    }
+
+    setImportMode(mode);
     setImportStatus({
       type: 'loading',
       message: mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...'
     });
-    const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
-      type: 'START_X_IMPORT',
-      mode
-    });
+    try {
+      const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
+        type: 'START_X_IMPORT',
+        mode
+      });
 
-    if (!response.ok) {
-      setImportStatus({ type: 'error', message: formatImportError(response.error) });
-      return;
+      if (!response.ok) {
+        setImportStatus({ type: 'error', message: formatImportError(response.error) });
+        return;
+      }
+
+      await library.refresh();
+      const session = response.data?.session;
+      setImportStatus(
+        session
+          ? {
+              type: 'success',
+              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
+            }
+          : { type: 'success', message: 'Import complete.' }
+      );
+    } finally {
+      setImportMode(null);
     }
-
-    await library.refresh();
-    const session = response.data?.session;
-    setImportStatus(
-      session
-        ? {
-            type: 'success',
-            message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
-          }
-        : { type: 'success', message: 'Import complete.' }
-    );
   }
 
   useEffect(() => {
@@ -594,6 +605,31 @@ function App() {
     });
   }
 
+  function handleSelectAllVisible() {
+    setSelectedIds(new Set(searchMatches.map((match) => match.bookmark).filter((bookmark) => !bookmark.locked).map((bookmark) => bookmark.id)));
+  }
+
+  function handleInvertVisibleSelection() {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const { bookmark } of searchMatches) {
+        if (bookmark.locked) {
+          continue;
+        }
+        if (next.has(bookmark.id)) {
+          next.delete(bookmark.id);
+        } else {
+          next.add(bookmark.id);
+        }
+      }
+      return next;
+    });
+  }
+
+  function handleClearSelection() {
+    setSelectedIds(new Set());
+  }
+
   function handleFolderChange(nextFolderId: FolderFilter) {
     setFolderId(nextFolderId);
     setTagId(undefined);
@@ -615,6 +651,7 @@ function App() {
   const visibleTagOptions = tagDialog?.kind === 'remove'
     ? (library.bookmarks.find((item) => item.id === tagDialog.bookmarkId)?.tags ?? [])
     : library.tags;
+  const selectableCount = searchMatches.filter((match) => !match.bookmark.locked).length;
 
   return (
     <PageShell title="BookmarkNest" description="Import the X bookmarks already loaded in your browser, then organize and export them locally.">
@@ -653,13 +690,13 @@ function App() {
                 ) : null}
               </label>
               <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="primary" onClick={() => void handleImport('visible')}>
-                    <Upload size={16} />
-                    Import visible
+                  <Button variant="primary" onClick={() => void handleImport('visible')} disabled={Boolean(importMode)}>
+                    {importMode === 'visible' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+                    {importMode === 'visible' ? 'Importing...' : 'Import visible'}
                   </Button>
-                  <Button onClick={() => void handleImport('auto-scroll')}>
-                    <Upload size={16} />
-                    Import more
+                  <Button onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
+                    {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+                    {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                   </Button>
                 <div className="flex rounded-app border border-border bg-background p-1">
                   <Button size="xs" variant="ghost" onClick={() => void handleExport('json')} disabled={searchMatches.length === 0}>
@@ -695,17 +732,28 @@ function App() {
               </button>
             </div>
           ) : null}
-          {selectedIds.size > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/80 px-4 py-3 text-sm">
-              <span className="font-medium">{selectedIds.size} selected</span>
-              {!isPro ? <span className="text-muted-foreground">Bulk actions are a Pro feature.</span> : null}
+          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/60 px-4 py-3 text-sm">
+            <span className="font-medium">{selectedIds.size} selected</span>
+            <span className="text-muted-foreground">{selectableCount} visible</span>
+            <Button size="sm" onClick={handleSelectAllVisible} disabled={selectableCount === 0}>
+              Select all visible
+            </Button>
+            <Button size="sm" onClick={handleInvertVisibleSelection} disabled={selectableCount === 0}>
+              Invert visible
+            </Button>
+            <Button size="sm" variant="ghost" onClick={handleClearSelection} disabled={selectedIds.size === 0}>
+              Clear
+            </Button>
+            {selectedIds.size > 0 ? (
+              <>
+                {!isPro ? <span className="text-muted-foreground">Bulk actions are a Pro feature.</span> : null}
               <Button size="sm" onClick={() => void handleBulkTag()} disabled={!isPro}>
                 Add tag
               </Button>
               <Button size="sm" onClick={() => void handleBulkMove()} disabled={!isPro}>
                 Move
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => void handleBulkDelete()} disabled={!isPro}>
+              <Button size="sm" variant="danger" onClick={() => void handleBulkDelete()} disabled={!isPro}>
                 Delete
               </Button>
               {!isPro ? (
@@ -713,8 +761,9 @@ function App() {
                   Upgrade
                 </Button>
               ) : null}
-            </div>
-          ) : null}
+              </>
+            ) : null}
+          </div>
           <BookmarkList
             matches={searchMatches}
             loading={library.loading}

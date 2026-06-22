@@ -100,6 +100,21 @@ describe('bookmarkRepository', () => {
     expect((await db.tags.get(tag.id))?.usageCount).toBe(0);
   });
 
+  it('updates tag usage when tagged bookmarks are soft deleted', async () => {
+    const first = await upsertBookmark(bookmarkInput(1));
+    const second = await upsertBookmark(bookmarkInput(2));
+    const tag = await createTag('ai');
+
+    await addTagToBookmarks([first.bookmark.id, second.bookmark.id], tag.id);
+    expect((await db.tags.get(tag.id))?.usageCount).toBe(2);
+
+    await softDeleteBookmark(first.bookmark.id);
+    expect((await db.tags.get(tag.id))?.usageCount).toBe(1);
+
+    await softDeleteBookmark(second.bookmark.id);
+    expect((await db.tags.get(tag.id))?.usageCount).toBe(0);
+  });
+
   it('allows multiple different tags on the same bookmark', async () => {
     const inserted = await upsertBookmark(bookmarkInput(1));
     const first = await createTag('alpha');
