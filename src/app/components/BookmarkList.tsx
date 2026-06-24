@@ -3,8 +3,10 @@ import { BookmarkCard } from './BookmarkCard';
 
 interface BookmarkListProps {
   matches: SearchMatch[];
+  totalCount: number;
   loading: boolean;
   error: string | null;
+  hasSearchQuery: boolean;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
@@ -16,8 +18,10 @@ interface BookmarkListProps {
 
 export function BookmarkList({
   matches,
+  totalCount,
   loading,
   error,
+  hasSearchQuery,
   onArchive,
   onDelete,
   onMove,
@@ -35,11 +39,16 @@ export function BookmarkList({
   }
 
   if (matches.length === 0) {
+    const isFilteredEmpty = totalCount > 0 || hasSearchQuery;
     return (
       <div className="flex min-h-[460px] items-center justify-center p-8">
         <div className="max-w-sm rounded-app border border-dashed border-border bg-background px-6 py-8 text-center">
-          <p className="text-sm font-medium text-foreground">No bookmarks in this view</p>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">Open X bookmarks in Chrome, let the page load, then import the currently loaded items.</p>
+          <p className="text-sm font-medium text-foreground">{isFilteredEmpty ? 'No matching bookmarks' : 'No bookmarks yet'}</p>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {isFilteredEmpty
+              ? 'Clear the search or switch filters to see more saved bookmarks.'
+              : 'Open X bookmarks in Chrome, let the page load, then import the currently loaded items.'}
+          </p>
         </div>
       </div>
     );

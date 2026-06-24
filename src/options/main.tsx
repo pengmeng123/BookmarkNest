@@ -16,10 +16,11 @@ function Options() {
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Backup controls are not available yet.</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button size="sm">Export backup</Button>
-            <Button size="sm">Import backup</Button>
-            <Button size="sm" variant="ghost">
+            <Button size="sm" disabled>Export backup</Button>
+            <Button size="sm" disabled>Import backup</Button>
+            <Button size="sm" variant="ghost" disabled>
               Clear local data
             </Button>
           </div>

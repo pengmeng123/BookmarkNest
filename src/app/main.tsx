@@ -30,6 +30,7 @@ import {
   moveBookmarksToFolder,
   removeTagFromBookmark,
   renameFolder,
+  restoreBookmarks,
   setBookmarkArchived,
   softDeleteBookmark,
   addTagToBookmarks,
@@ -60,6 +61,7 @@ type ConfirmDialogState =
   | null;
 type TagDialogState = { kind: 'add' | 'remove'; bookmarkIds: string[]; bookmarkId?: string } | null;
 type ImportStatus = { type: 'loading' | 'success' | 'error'; message: string } | null;
+type ActionToast = { type: 'success' | 'error'; message: string; undoBookmarkIds?: string[] } | null;
 
 function formatImportError(error?: string) {
   if (!error) {
@@ -184,10 +186,14 @@ function AppSidebar({
 
 function NameDialog({
   state,
+  busy,
+  error,
   onClose,
   onSubmit
 }: {
   state: NameDialogState;
+  busy: boolean;
+  error: string | null;
   onClose: () => void;
   onSubmit: (value: string) => void;
 }) {
@@ -206,32 +212,39 @@ function NameDialog({
       open={Boolean(state)}
       title={state.title}
       onClose={onClose}
+      closeOnOverlayClick={!busy}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => onSubmit(value.trim())} disabled={!value.trim()}>
-            Save
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={() => onSubmit(value.trim())} disabled={!value.trim() || busy}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
+            {busy ? 'Saving...' : 'Save'}
           </Button>
         </>
       }
     >
       <Field label={state.label}>
-        <TextInput value={value} autoFocus onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => {
-          if (event.key === 'Enter' && value.trim()) {
+        <TextInput value={value} autoFocus disabled={busy} onChange={(event) => setValue(event.target.value)} onKeyDown={(event) => {
+          if (event.key === 'Enter' && value.trim() && !busy) {
             onSubmit(value.trim());
           }
         }} />
       </Field>
+      {error ? <p className="mt-3 rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p> : null}
     </Dialog>
   );
 }
 
 function ConfirmDialog({
   state,
+  busy,
+  error,
   onClose,
   onConfirm
 }: {
   state: ConfirmDialogState;
+  busy: boolean;
+  error: string | null;
   onClose: () => void;
   onConfirm: () => void;
 }) {
@@ -245,11 +258,13 @@ function ConfirmDialog({
       title={state.title}
       description={state.description}
       onClose={onClose}
+      closeOnOverlayClick={!busy}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="danger" onClick={onConfirm}>
-            {state.actionLabel}
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="danger" onClick={onConfirm} disabled={busy}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
+            {busy ? 'Working...' : state.actionLabel}
           </Button>
         </>
       }
@@ -257,6 +272,7 @@ function ConfirmDialog({
       <div className="rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-muted-foreground">
         This only changes your local BookmarkNest library.
       </div>
+      {error ? <p className="mt-3 rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p> : null}
     </Dialog>
   );
 }
@@ -264,11 +280,15 @@ function ConfirmDialog({
 function TagDialog({
   state,
   tags,
+  busy,
+  error,
   onClose,
   onSubmit
 }: {
   state: TagDialogState;
   tags: { id: string; name: string; usageCount: number; color: string }[];
+  busy: boolean;
+  error: string | null;
   onClose: () => void;
   onSubmit: (tagName: string) => void;
 }) {
@@ -293,11 +313,13 @@ function TagDialog({
       title={isRemove ? 'Remove tag' : 'Add tag'}
       description={isRemove ? 'Choose which tag to remove from this bookmark.' : `${state.bookmarkIds.length} selected.`}
       onClose={onClose}
+      closeOnOverlayClick={!busy}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" onClick={() => onSubmit(value)} disabled={!value}>
-            {isRemove ? 'Remove' : 'Add tag'}
+          <Button onClick={onClose} disabled={busy}>Cancel</Button>
+          <Button variant="primary" onClick={() => onSubmit(value)} disabled={!value || busy}>
+            {busy ? <LoaderCircle size={16} className="animate-spin" /> : null}
+            {busy ? 'Saving...' : isRemove ? 'Remove' : 'Add tag'}
           </Button>
         </>
       }
@@ -305,7 +327,7 @@ function TagDialog({
       <div className="space-y-4">
         {tags.length > 0 ? (
           <Field label="Tag">
-            <SelectInput value={selectedTag} onChange={(event) => setSelectedTag(event.target.value)}>
+            <SelectInput value={selectedTag} disabled={busy} onChange={(event) => setSelectedTag(event.target.value)}>
               {tags.map((tag) => (
                 <option key={tag.id} value={tag.name}>
                   {tag.name}
@@ -318,9 +340,10 @@ function TagDialog({
 
         {!isRemove && (selectedTag === '__new__' || tags.length === 0) ? (
           <Field label="New tag name">
-            <TextInput value={newTagName} autoFocus onChange={(event) => setNewTagName(event.target.value)} />
+            <TextInput value={newTagName} autoFocus disabled={busy} onChange={(event) => setNewTagName(event.target.value)} />
           </Field>
         ) : null}
+        {error ? <p className="rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</p> : null}
       </div>
     </Dialog>
   );
@@ -338,6 +361,9 @@ function App() {
   const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
   const [tagDialog, setTagDialog] = useState<TagDialogState>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const [actionToast, setActionToast] = useState<ActionToast>(null);
   const debouncedSearchQuery = useDebouncedValue(searchQuery, 200);
   const { isPro } = useLicenseState();
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived, isPro }), [folderId, tagId, includeArchived, isPro]);
@@ -353,17 +379,40 @@ function App() {
     setSelectedIds(new Set());
   }
 
+  function formatActionError(error: unknown) {
+    return error instanceof Error ? error.message : 'Action failed. Please try again.';
+  }
+
+  async function runDialogAction(action: () => Promise<void>) {
+    if (dialogBusy) {
+      return;
+    }
+
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await action();
+    } catch (error) {
+      setDialogError(formatActionError(error));
+    } finally {
+      setDialogBusy(false);
+    }
+  }
+
   function handleCreateFolder() {
+    setDialogError(null);
     setNameDialog({ kind: 'create-folder', title: 'New folder', label: 'Folder name' });
   }
 
   function handleRenameFolder(folderId: string) {
     const folder = library.folders.find((item) => item.id === folderId);
+    setDialogError(null);
     setNameDialog({ kind: 'rename-folder', title: 'Rename folder', label: 'Folder name', folderId, initialValue: folder?.name });
   }
 
   function handleDeleteFolder(deletedFolderId: string) {
     const folder = library.folders.find((item) => item.id === deletedFolderId);
+    setDialogError(null);
     setConfirmDialog({
       kind: 'delete-folder',
       title: `Delete ${folder?.name ?? 'folder'}?`,
@@ -374,11 +423,13 @@ function App() {
   }
 
   function handleCreateTag() {
+    setDialogError(null);
     setNameDialog({ kind: 'create-tag', title: 'New tag', label: 'Tag name' });
   }
 
   function handleDeleteTag(tagId: string) {
     const tag = library.tags.find((item) => item.id === tagId);
+    setDialogError(null);
     setConfirmDialog({
       kind: 'delete-tag',
       title: `Delete ${tag?.name ?? 'tag'}?`,
@@ -393,16 +444,18 @@ function App() {
       return;
     }
 
-    if (nameDialog.kind === 'create-folder') {
-      await refreshAfter(createFolder(value));
-    }
-    if (nameDialog.kind === 'rename-folder') {
-      await refreshAfter(renameFolder(nameDialog.folderId, value));
-    }
-    if (nameDialog.kind === 'create-tag') {
-      await refreshAfter(createTag(value));
-    }
-    setNameDialog(null);
+    await runDialogAction(async () => {
+      if (nameDialog.kind === 'create-folder') {
+        await refreshAfter(createFolder(value));
+      }
+      if (nameDialog.kind === 'rename-folder') {
+        await refreshAfter(renameFolder(nameDialog.folderId, value));
+      }
+      if (nameDialog.kind === 'create-tag') {
+        await refreshAfter(createTag(value));
+      }
+      setNameDialog(null);
+    });
   }
 
   async function handleConfirmSubmit() {
@@ -410,39 +463,47 @@ function App() {
       return;
     }
 
-    if (confirmDialog.kind === 'delete-folder') {
-      const wasViewingDeletedFolder = folderId === confirmDialog.folderId;
-      await deleteFolder(confirmDialog.folderId);
-      setSelectedIds(new Set());
-      setConfirmDialog(null);
+    await runDialogAction(async () => {
+      if (confirmDialog.kind === 'delete-folder') {
+        const wasViewingDeletedFolder = folderId === confirmDialog.folderId;
+        await deleteFolder(confirmDialog.folderId);
+        setSelectedIds(new Set());
+        setConfirmDialog(null);
 
-      if (wasViewingDeletedFolder) {
-        setFolderId(undefined);
-      } else {
-        await library.refresh();
+        if (wasViewingDeletedFolder) {
+          setFolderId(undefined);
+        } else {
+          await library.refresh();
+        }
+        return;
       }
-      return;
-    }
 
-    if (confirmDialog.kind === 'delete-tag') {
-      await refreshAfter(deleteTag(confirmDialog.tagId));
-      setTagId(undefined);
-    }
-    if (confirmDialog.kind === 'delete-bookmark') {
-      await refreshAfter(softDeleteBookmark(confirmDialog.bookmarkId));
-    }
-    if (confirmDialog.kind === 'bulk-delete') {
-      await refreshAfter(Promise.all(Array.from(selectedIds).map((bookmarkId) => softDeleteBookmark(bookmarkId))));
-    }
-    setConfirmDialog(null);
+      if (confirmDialog.kind === 'delete-tag') {
+        await refreshAfter(deleteTag(confirmDialog.tagId));
+        setTagId(undefined);
+      }
+      if (confirmDialog.kind === 'delete-bookmark') {
+        const deletedIds = [confirmDialog.bookmarkId];
+        await refreshAfter(softDeleteBookmark(confirmDialog.bookmarkId));
+        setActionToast({ type: 'success', message: 'Bookmark deleted.', undoBookmarkIds: deletedIds });
+      }
+      if (confirmDialog.kind === 'bulk-delete') {
+        const deletedIds = Array.from(selectedIds);
+        await refreshAfter(Promise.all(deletedIds.map((bookmarkId) => softDeleteBookmark(bookmarkId))));
+        setActionToast({ type: 'success', message: `${deletedIds.length} bookmarks deleted.`, undoBookmarkIds: deletedIds });
+      }
+      setConfirmDialog(null);
+    });
   }
 
   function handleMove(bookmarkId: string) {
+    setDialogError(null);
     setMoveTargetIds([bookmarkId]);
   }
 
   function handleBulkMove() {
     if (selectedIds.size) {
+      setDialogError(null);
       setMoveTargetIds(Array.from(selectedIds));
     }
   }
@@ -451,21 +512,26 @@ function App() {
     if (!moveTargetIds?.length) {
       return;
     }
-    await refreshAfter(moveBookmarksToFolder(moveTargetIds, folderId));
-    setMoveTargetIds(null);
+    await runDialogAction(async () => {
+      await refreshAfter(moveBookmarksToFolder(moveTargetIds, folderId));
+      setMoveTargetIds(null);
+    });
   }
 
   async function handleCreateFolderAndMove(folderName: string) {
     if (!moveTargetIds?.length) {
       return;
     }
-    const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
-    const folder = existing ?? (await createFolder(folderName));
-    await refreshAfter(moveBookmarksToFolder(moveTargetIds, folder.id));
-    setMoveTargetIds(null);
+    await runDialogAction(async () => {
+      const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
+      const folder = existing ?? (await createFolder(folderName));
+      await refreshAfter(moveBookmarksToFolder(moveTargetIds, folder.id));
+      setMoveTargetIds(null);
+    });
   }
 
   function handleTag(bookmarkId: string) {
+    setDialogError(null);
     setTagDialog({ kind: 'add', bookmarkIds: [bookmarkId], bookmarkId });
   }
 
@@ -474,6 +540,7 @@ function App() {
       return;
     }
 
+    setDialogError(null);
     setTagDialog({ kind: 'add', bookmarkIds: Array.from(selectedIds) });
   }
 
@@ -483,6 +550,7 @@ function App() {
       return;
     }
 
+    setDialogError(null);
     setTagDialog({ kind: 'remove', bookmarkIds: [bookmarkId], bookmarkId });
   }
 
@@ -491,20 +559,22 @@ function App() {
       return;
     }
 
-    if (tagDialog.kind === 'remove') {
-      const bookmark = library.bookmarks.find((item) => item.id === tagDialog.bookmarkId);
-      const tag = bookmark?.tags.find((item) => item.name.toLowerCase() === tagName.toLowerCase());
-      if (tag && bookmark) {
-        await refreshAfter(removeTagFromBookmark(bookmark.id, tag.id));
+    await runDialogAction(async () => {
+      if (tagDialog.kind === 'remove') {
+        const bookmark = library.bookmarks.find((item) => item.id === tagDialog.bookmarkId);
+        const tag = bookmark?.tags.find((item) => item.name.toLowerCase() === tagName.toLowerCase());
+        if (tag && bookmark) {
+          await refreshAfter(removeTagFromBookmark(bookmark.id, tag.id));
+        }
+        setTagDialog(null);
+        return;
       }
-      setTagDialog(null);
-      return;
-    }
 
-    const existing = library.tags.find((tag) => tag.name.toLowerCase() === tagName.toLowerCase());
-    const tag = existing ?? (await createTag(tagName));
-    await refreshAfter(addTagToBookmarks(tagDialog.bookmarkIds, tag.id));
-    setTagDialog(null);
+      const existing = library.tags.find((tag) => tag.name.toLowerCase() === tagName.toLowerCase());
+      const tag = existing ?? (await createTag(tagName));
+      await refreshAfter(addTagToBookmarks(tagDialog.bookmarkIds, tag.id));
+      setTagDialog(null);
+    });
   }
 
   async function handleArchive(bookmarkId: string, archived: boolean) {
@@ -512,6 +582,7 @@ function App() {
   }
 
   function handleDelete(bookmarkId: string) {
+    setDialogError(null);
     setConfirmDialog({
       kind: 'delete-bookmark',
       title: 'Delete bookmark?',
@@ -526,6 +597,7 @@ function App() {
       return;
     }
 
+    setDialogError(null);
     setConfirmDialog({
       kind: 'bulk-delete',
       title: `Delete ${selectedIds.size} bookmarks?`,
@@ -585,13 +657,17 @@ function App() {
   }
 
   useEffect(() => {
-    if (!importStatus || importStatus.type === 'error') {
+    if (!importStatus || importStatus.type !== 'success') {
       return;
     }
 
-    const timeoutId = window.setTimeout(() => setImportStatus(null), importStatus.type === 'loading' ? 12000 : 6000);
+    const timeoutId = window.setTimeout(() => setImportStatus(null), 6000);
     return () => window.clearTimeout(timeoutId);
   }, [importStatus]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [folderId, tagId, includeArchived, debouncedSearchQuery]);
 
   function handleSelectedChange(bookmarkId: string, selected: boolean) {
     setSelectedIds((current) => {
@@ -628,6 +704,48 @@ function App() {
 
   function handleClearSelection() {
     setSelectedIds(new Set());
+  }
+
+  async function handleUndoDelete(bookmarkIds: string[]) {
+    try {
+      await restoreBookmarks(bookmarkIds);
+      await library.refresh();
+      setActionToast({ type: 'success', message: `${bookmarkIds.length === 1 ? 'Bookmark' : 'Bookmarks'} restored.` });
+    } catch (error) {
+      setActionToast({ type: 'error', message: formatActionError(error) });
+    }
+  }
+
+  function closeNameDialog() {
+    if (dialogBusy) {
+      return;
+    }
+    setDialogError(null);
+    setNameDialog(null);
+  }
+
+  function closeConfirmDialog() {
+    if (dialogBusy) {
+      return;
+    }
+    setDialogError(null);
+    setConfirmDialog(null);
+  }
+
+  function closeTagDialog() {
+    if (dialogBusy) {
+      return;
+    }
+    setDialogError(null);
+    setTagDialog(null);
+  }
+
+  function closeMoveDialog() {
+    if (dialogBusy) {
+      return;
+    }
+    setDialogError(null);
+    setMoveTargetIds(null);
   }
 
   function handleFolderChange(nextFolderId: FolderFilter) {
@@ -766,8 +884,10 @@ function App() {
           </div>
           <BookmarkList
             matches={searchMatches}
+            totalCount={library.bookmarks.length}
             loading={library.loading}
             error={library.error}
+            hasSearchQuery={Boolean(debouncedSearchQuery.trim())}
             onArchive={(bookmarkId, archived) => void handleArchive(bookmarkId, archived)}
             onDelete={(bookmarkId) => void handleDelete(bookmarkId)}
             onMove={handleMove}
@@ -782,18 +902,45 @@ function App() {
         folders={library.folders}
         open={Boolean(moveTargetIds)}
         itemCount={moveTargetIds?.length ?? 0}
-        onClose={() => setMoveTargetIds(null)}
+        busy={dialogBusy}
+        error={dialogError}
+        onClose={closeMoveDialog}
         onMove={(nextFolderId) => void handleMoveToFolder(nextFolderId)}
         onCreateAndMove={(folderName) => void handleCreateFolderAndMove(folderName)}
       />
-      <NameDialog state={nameDialog} onClose={() => setNameDialog(null)} onSubmit={(value) => void handleNameSubmit(value)} />
-      <ConfirmDialog state={confirmDialog} onClose={() => setConfirmDialog(null)} onConfirm={() => void handleConfirmSubmit()} />
+      <NameDialog state={nameDialog} busy={dialogBusy} error={dialogError} onClose={closeNameDialog} onSubmit={(value) => void handleNameSubmit(value)} />
+      <ConfirmDialog state={confirmDialog} busy={dialogBusy} error={dialogError} onClose={closeConfirmDialog} onConfirm={() => void handleConfirmSubmit()} />
       <TagDialog
         state={tagDialog}
         tags={visibleTagOptions}
-        onClose={() => setTagDialog(null)}
+        busy={dialogBusy}
+        error={dialogError}
+        onClose={closeTagDialog}
         onSubmit={(tagName) => void handleTagSubmit(tagName)}
       />
+      {actionToast ? (
+        <div
+          className={cn(
+            'fixed bottom-4 right-4 z-50 flex max-w-sm items-center gap-3 rounded-app border bg-surface px-4 py-3 text-sm shadow-xl',
+            actionToast.type === 'error' ? 'border-danger/25 text-danger' : 'border-border text-foreground'
+          )}
+          role="status"
+        >
+          <span className="min-w-0 flex-1">{actionToast.message}</span>
+          {actionToast.undoBookmarkIds?.length ? (
+            <Button size="xs" onClick={() => void handleUndoDelete(actionToast.undoBookmarkIds ?? [])}>
+              Undo
+            </Button>
+          ) : null}
+          <button
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-app text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Dismiss notification"
+            onClick={() => setActionToast(null)}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      ) : null}
     </PageShell>
   );
 }

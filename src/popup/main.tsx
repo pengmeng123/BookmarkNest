@@ -1,4 +1,4 @@
-import { ExternalLink, Upload } from 'lucide-react';
+import { ExternalLink, LoaderCircle, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -21,25 +21,37 @@ function formatImportError(error?: string) {
 
 function Popup() {
   const [status, setStatus] = useState<string | null>(null);
+  const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
 
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'visible') {
-    setStatus(mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...');
-    const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
-      type: 'START_X_IMPORT',
-      mode
-    });
-
-    if (!response.ok) {
-      setStatus(formatImportError(response.error));
+    if (importMode) {
       return;
     }
 
-    const session = response.data?.session;
-    setStatus(
-      session
-        ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
-        : 'Import started.'
-    );
+    setImportMode(mode);
+    setStatus(mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...');
+    try {
+      const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
+        type: 'START_X_IMPORT',
+        mode
+      });
+
+      if (!response.ok) {
+        setStatus(formatImportError(response.error));
+        return;
+      }
+
+      const session = response.data?.session;
+      setStatus(
+        session
+          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
+          : 'Import started.'
+      );
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Import failed. Please try again.');
+    } finally {
+      setImportMode(null);
+    }
   }
 
   return (
@@ -53,13 +65,13 @@ function Popup() {
           <ExternalLink size={16} />
           Open BookmarkNest
         </Button>
-        <Button onClick={() => void handleImport('visible')}>
-          <Upload size={16} />
-          Import visible
+        <Button onClick={() => void handleImport('visible')} disabled={Boolean(importMode)}>
+          {importMode === 'visible' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+          {importMode === 'visible' ? 'Importing...' : 'Import visible'}
         </Button>
-        <Button onClick={() => void handleImport('auto-scroll')}>
-          <Upload size={16} />
-          Import more
+        <Button onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
+          {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+          {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
         </Button>
         <Button variant="ghost" onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}>
           Upgrade / Manage License

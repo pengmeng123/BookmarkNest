@@ -1,4 +1,5 @@
-import { Archive, ExternalLink, FolderInput, Link, Tag, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Archive, Check, ExternalLink, FolderInput, Link, Tag, Trash2 } from 'lucide-react';
 
 import { Button } from '../../components/Button';
 import type { BookmarkListItem } from '../../lib/db/bookmarkRepository';
@@ -58,6 +59,25 @@ export function BookmarkCard({
   selected,
   onSelectedChange
 }: BookmarkCardProps) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const postDate = bookmark.createdAt ? formatDate(bookmark.createdAt) : bookmark.createdAtText;
+
+  async function handleCopy() {
+    if (!bookmark.tweetUrl) {
+      setCopyState('failed');
+      window.setTimeout(() => setCopyState('idle'), 1600);
+      return;
+    }
+
+    try {
+      await navigator.clipboard?.writeText(bookmark.tweetUrl);
+      setCopyState('copied');
+    } catch {
+      setCopyState('failed');
+    }
+    window.setTimeout(() => setCopyState('idle'), 1600);
+  }
+
   return (
     <article className="bg-surface p-4 transition hover:bg-background/60">
       <div className="flex gap-3">
@@ -86,7 +106,8 @@ export function BookmarkCard({
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="rounded-app bg-muted px-2 py-0.5">{bookmark.folder?.name ?? 'Uncategorized'}</span>
-                <span>{formatDate(bookmark.importedAt)}</span>
+                {postDate ? <span>Posted {postDate}</span> : null}
+                <span>Imported {formatDate(bookmark.importedAt)}</span>
               </div>
             </div>
             {bookmark.locked ? (
@@ -114,9 +135,9 @@ export function BookmarkCard({
                 Open
               </Button>
             ) : null}
-            <Button size="sm" onClick={() => void navigator.clipboard?.writeText(bookmark.tweetUrl ?? '')}>
-              <Link size={14} />
-              Copy
+            <Button size="sm" onClick={() => void handleCopy()} disabled={!bookmark.tweetUrl}>
+              {copyState === 'copied' ? <Check size={14} /> : <Link size={14} />}
+              {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
             </Button>
             <Button size="sm" onClick={() => onTag(bookmark.id)} disabled={bookmark.locked}>
               <Tag size={14} />

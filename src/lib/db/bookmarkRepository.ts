@@ -105,6 +105,22 @@ export async function softDeleteBookmark(bookmarkId: string) {
   });
 }
 
+export async function restoreBookmarks(bookmarkIds: string[]) {
+  await db.transaction('rw', db.bookmarks, db.tags, async () => {
+    const restoredTagIds = new Set<string>();
+    await db.bookmarks.where('id').anyOf(bookmarkIds).modify((bookmark) => {
+      if (!bookmark.deleted) {
+        return;
+      }
+      bookmark.deleted = false;
+      delete bookmark.deletedAt;
+      bookmark.updatedAt = Date.now();
+      bookmark.tagIds.forEach((tagId) => restoredTagIds.add(tagId));
+    });
+    await recalculateTagUsage(Array.from(restoredTagIds));
+  });
+}
+
 export async function setBookmarkArchived(bookmarkId: string, archived: boolean) {
   await db.bookmarks.update(bookmarkId, {
     archived,

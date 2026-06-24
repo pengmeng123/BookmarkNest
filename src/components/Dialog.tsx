@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 import { cn } from '../lib/utils/cn';
@@ -11,19 +11,87 @@ interface DialogProps {
   footer?: ReactNode;
   onClose: () => void;
   className?: string;
+  closeOnOverlayClick?: boolean;
 }
 
-export function Dialog({ open, title, description, children, footer, onClose, className }: DialogProps) {
+const focusableSelector = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])'
+].join(',');
+
+export function Dialog({ open, title, description, children, footer, onClose, className, closeOnOverlayClick = true }: DialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.setTimeout(() => {
+      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(focusableSelector);
+      firstFocusable?.focus();
+    }, 0);
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== 'Tab' || !dialogRef.current) {
+        return;
+      }
+
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(focusableSelector));
+      if (!focusable.length) {
+        event.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previousFocus?.focus();
+    };
+  }, [onClose, open]);
+
   if (!open) {
     return null;
   }
 
   return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[3px]">
+    <div
+      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[3px]"
+      onMouseDown={(event) => {
+        if (closeOnOverlayClick && event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="dialog-title"
+        tabIndex={-1}
         className={cn(
           'w-full max-w-md overflow-hidden rounded-app border border-border bg-surface shadow-2xl ring-1 ring-black/5',
           className
