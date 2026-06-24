@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
+import type { ImportSession } from '../shared/types';
 import '../styles/globals.css';
 
 function formatImportError(error?: string) {
@@ -29,9 +30,9 @@ function Popup() {
     }
 
     setImportMode(mode);
-    setStatus(mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...');
+    setStatus(mode === 'auto-scroll' ? 'Opening the X bookmarks tab, scrolling loaded items, then importing...' : 'Looking for an open X bookmarks tab...');
     try {
-      const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
+      const response = await sendRuntimeMessage<{ session?: ImportSession }>({
         type: 'START_X_IMPORT',
         mode
       });
@@ -44,7 +45,7 @@ function Popup() {
       const session = response.data?.session;
       setStatus(
         session
-          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
+          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} found.`
           : 'Import started.'
       );
     } catch (error) {

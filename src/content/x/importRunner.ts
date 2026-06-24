@@ -18,6 +18,16 @@ export interface AutoScrollOptions {
   scrollBy?: number;
 }
 
+export interface AutoScrollProgress {
+  phase: 'scanning' | 'scrolling' | 'settled';
+  scrolls: number;
+  foundCount: number;
+  uniqueCount: number;
+  idleRounds: number;
+  maxScrolls: number;
+  reachedEnd: boolean;
+}
+
 function createId(prefix: string) {
   if (globalThis.crypto?.randomUUID) {
     return `${prefix}_${globalThis.crypto.randomUUID()}`;
@@ -134,7 +144,7 @@ async function saveCollectedBookmarks(sourceUrl: string, collected: Map<string, 
 export async function loadMoreBookmarksByScrolling(
   root: ParentNode = document,
   controller?: ImportController,
-  onProgress?: (progress: { scrolls: number; foundCount: number; uniqueCount: number; idleRounds: number }) => void,
+  onProgress?: (progress: AutoScrollProgress) => void,
   options: AutoScrollOptions = {}
 ) {
   const maxScrolls = options.maxScrolls ?? 30;
@@ -147,7 +157,15 @@ export async function loadMoreBookmarksByScrolling(
   let lastFoundCount = seenKeys.size;
   let idleRounds = 0;
 
-  onProgress?.({ scrolls: 0, foundCount: parseLoadedBookmarkCards(root).foundCount, uniqueCount: seenKeys.size, idleRounds });
+  onProgress?.({
+    phase: 'scanning',
+    scrolls: 0,
+    foundCount: parseLoadedBookmarkCards(root).foundCount,
+    uniqueCount: seenKeys.size,
+    idleRounds,
+    maxScrolls,
+    reachedEnd: false
+  });
 
   for (let scrolls = 1; scrolls <= maxScrolls; scrolls += 1) {
     if (controller?.cancelled) {
@@ -173,9 +191,10 @@ export async function loadMoreBookmarksByScrolling(
     idleRounds = discoveredNewBookmark || moved ? 0 : idleRounds + 1;
     lastFoundCount = Math.max(lastFoundCount, seenKeys.size);
     lastScrollTop = scrollTop;
-    onProgress?.({ scrolls, foundCount: parsed.foundCount, uniqueCount: seenKeys.size, idleRounds });
+    onProgress?.({ phase: 'scrolling', scrolls, foundCount: parsed.foundCount, uniqueCount: seenKeys.size, idleRounds, maxScrolls, reachedEnd: nearBottom });
 
     if (scrolls >= minScrolls && (idleRounds >= maxIdleRounds || (nearBottom && !discoveredNewBookmark && !moved))) {
+      onProgress?.({ phase: 'settled', scrolls, foundCount: parsed.foundCount, uniqueCount: seenKeys.size, idleRounds, maxScrolls, reachedEnd: nearBottom });
       break;
     }
   }
@@ -187,7 +206,7 @@ export async function runImportWithAutoScroll(
   sourceUrl: string,
   root: ParentNode = document,
   controller?: ImportController,
-  onProgress?: (progress: { scrolls: number; foundCount: number; uniqueCount: number; idleRounds: number }) => void,
+  onProgress?: (progress: AutoScrollProgress) => void,
   options: AutoScrollOptions = {}
 ): Promise<ImportRunResult> {
   const maxScrolls = options.maxScrolls ?? 30;
@@ -204,7 +223,15 @@ export async function runImportWithAutoScroll(
   const initial = collectParsedBookmarks(root, collected);
   failedCount += initial.failedCount;
   lastUniqueCount = collected.size;
-  onProgress?.({ scrolls: 0, foundCount: initial.foundCount, uniqueCount: collected.size, idleRounds });
+  onProgress?.({
+    phase: 'scanning',
+    scrolls: 0,
+    foundCount: initial.foundCount,
+    uniqueCount: collected.size,
+    idleRounds,
+    maxScrolls,
+    reachedEnd: false
+  });
 
   for (let scrolls = 1; scrolls <= maxScrolls; scrolls += 1) {
     if (controller?.cancelled) {
@@ -238,9 +265,10 @@ export async function runImportWithAutoScroll(
     idleRounds = discoveredNewBookmark || moved ? 0 : idleRounds + 1;
     lastUniqueCount = Math.max(lastUniqueCount, collected.size);
     lastScrollTop = scrollTop;
-    onProgress?.({ scrolls, foundCount: parsed.foundCount, uniqueCount: collected.size, idleRounds });
+    onProgress?.({ phase: 'scrolling', scrolls, foundCount: parsed.foundCount, uniqueCount: collected.size, idleRounds, maxScrolls, reachedEnd: nearBottom });
 
     if (scrolls >= minScrolls && (idleRounds >= maxIdleRounds || (nearBottom && !discoveredNewBookmark && !moved))) {
+      onProgress?.({ phase: 'settled', scrolls, foundCount: parsed.foundCount, uniqueCount: collected.size, idleRounds, maxScrolls, reachedEnd: nearBottom });
       break;
     }
   }

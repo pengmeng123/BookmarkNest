@@ -1,5 +1,5 @@
 import type { ExtensionMessage, MessageResponse } from '../../shared/types';
-import { runImportFromLoadedCards, runImportWithAutoScroll } from './importRunner';
+import { runImportFromLoadedCards, runImportWithAutoScroll, type AutoScrollProgress } from './importRunner';
 import { isXBookmarkPage } from './pageDetection';
 
 const CONTROL_ID = 'bookmarknest-import-control';
@@ -58,6 +58,18 @@ function setControlText(button: HTMLElement, text: string, loading = false) {
   setControlLoading(button, loading);
 }
 
+function formatAutoScrollProgress(progress: AutoScrollProgress) {
+  if (progress.phase === 'scanning') {
+    return `Scanning: ${progress.uniqueCount} found`;
+  }
+
+  if (progress.phase === 'settled') {
+    return progress.reachedEnd ? `Reached end: ${progress.uniqueCount}` : `Ready: ${progress.uniqueCount} found`;
+  }
+
+  return `Scroll ${progress.scrolls}/${progress.maxScrolls}: ${progress.uniqueCount}`;
+}
+
 function ensureImportControl() {
   if (!isXBookmarkPage(window.location.href)) {
     document.getElementById(CONTROL_ID)?.remove();
@@ -79,19 +91,19 @@ function ensureImportControl() {
   setControlText(button, 'Import more');
   button.setAttribute('aria-label', 'Import more X bookmarks to BookmarkNest');
   button.style.position = 'fixed';
-  button.style.right = '92px';
-  button.style.bottom = '18px';
+  button.style.right = '88px';
+  button.style.bottom = '16px';
   button.style.zIndex = '2147483647';
   button.style.border = '0';
   button.style.borderRadius = '999px';
-  button.style.padding = '9px 12px';
+  button.style.padding = '8px 11px';
   button.style.background = '#14786f';
   button.style.color = '#fff';
   button.style.display = 'inline-flex';
   button.style.alignItems = 'center';
   button.style.gap = '8px';
-  button.style.minHeight = '38px';
-  button.style.maxWidth = '210px';
+  button.style.minHeight = '36px';
+  button.style.maxWidth = '190px';
   button.style.whiteSpace = 'nowrap';
   button.style.font = '600 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   button.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.18)';
@@ -126,7 +138,7 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
     if (mode === 'auto-scroll') {
       const result = await runImportWithAutoScroll(window.location.href, document, currentImportController, (progress) => {
         if (control) {
-          setControlText(control, `Loading ${progress.uniqueCount} found`, true);
+          setControlText(control, formatAutoScrollProgress(progress), true);
         }
       });
 
@@ -135,7 +147,7 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
           control,
           result.session.status === 'cancelled'
             ? `Cancelled: ${result.session.insertedCount} saved`
-            : `Imported ${result.session.insertedCount} bookmarks`
+            : `Done: ${result.session.insertedCount} new`
         );
       }
 
@@ -160,7 +172,7 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
         control,
         result.session.status === 'cancelled'
           ? `Cancelled: ${result.session.insertedCount} saved`
-          : `Imported ${result.session.insertedCount} bookmarks`
+          : `Done: ${result.session.insertedCount} new`
       );
     }
 

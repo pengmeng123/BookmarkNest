@@ -1,6 +1,25 @@
 import { FREE_BOOKMARK_LIMIT } from '../../shared/constants';
-import type { Bookmark, BookmarkInput, Folder, Tag } from '../../shared/types';
+import type { Bookmark, BookmarkInput, Folder, ImportSession, Tag } from '../../shared/types';
 import { db } from './database';
+
+export interface LocalBackup {
+  schemaVersion: 2;
+  exportedAt: number;
+  bookmarks: Bookmark[];
+  folders: Folder[];
+  tags: Tag[];
+  importSessions: ImportSession[];
+}
+
+export interface FolderRestoreSnapshot {
+  folder: Folder;
+  assignments: { bookmarkId: string; folderId?: string }[];
+}
+
+export interface TagRestoreSnapshot {
+  tag: Tag;
+  bookmarkIds: string[];
+}
 
 function createId(prefix: string) {
   if (globalThis.crypto?.randomUUID) {
@@ -140,6 +159,63 @@ export async function resetDomainData() {
   });
 }
 
+export async function exportLocalBackup(): Promise<LocalBackup> {
+  const [bookmarks, folders, tags, importSessions] = await Promise.all([
+    db.bookmarks.toArray(),
+    db.folders.toArray(),
+    db.tags.toArray(),
+    db.importSessions.toArray()
+  ]);
+
+  return {
+    schemaVersion: 2,
+    exportedAt: Date.now(),
+    bookmarks,
+    folders,
+    tags,
+    importSessions
+  };
+}
+
+function isLocalBackup(value: unknown): value is LocalBackup {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const backup = value as Partial<LocalBackup>;
+  return (
+    backup.schemaVersion === 2 &&
+    Array.isArray(backup.bookmarks) &&
+    Array.isArray(backup.folders) &&
+    Array.isArray(backup.tags) &&
+    Array.isArray(backup.importSessions)
+  );
+}
+
+export async function importLocalBackup(value: unknown) {
+  if (!isLocalBackup(value)) {
+    throw new Error('Backup file is not a valid BookmarkNest backup.');
+  }
+
+  await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.importSessions, db.searchMetadata, async () => {
+    await Promise.all([
+      db.bookmarks.clear(),
+      db.folders.clear(),
+      db.tags.clear(),
+      db.importSessions.clear(),
+      db.searchMetadata.clear()
+    ]);
+    await Promise.all([
+      db.bookmarks.bulkPut(value.bookmarks),
+      db.folders.bulkPut(value.folders),
+      db.tags.bulkPut(value.tags),
+      db.importSessions.bulkPut(value.importSessions)
+    ]);
+  });
+
+  await recalculateTagUsage(value.tags.map((tag) => tag.id));
+}
+
 export async function createFolder(name: string) {
   const now = Date.now();
   const count = await db.folders.count();
@@ -159,13 +235,39 @@ export async function renameFolder(folderId: string, name: string) {
   await db.folders.update(folderId, { name, updatedAt: Date.now() });
 }
 
-export async function deleteFolder(folderId: string) {
+export async function deleteFolder(folderId: string): Promise<FolderRestoreSnapshot | null> {
+  const folder = await db.folders.get(folderId);
+  if (!folder) {
+    return null;
+  }
+
+  const assignments = (await db.bookmarks.where('folderId').equals(folderId).toArray()).map((bookmark) => ({
+    bookmarkId: bookmark.id,
+    folderId: bookmark.folderId
+  }));
+
   await db.transaction('rw', db.folders, db.bookmarks, async () => {
     await db.bookmarks.where('folderId').equals(folderId).modify((bookmark) => {
       delete bookmark.folderId;
       bookmark.updatedAt = Date.now();
     });
     await db.folders.delete(folderId);
+  });
+
+  return { folder, assignments };
+}
+
+export async function restoreFolder(snapshot: FolderRestoreSnapshot) {
+  await db.transaction('rw', db.folders, db.bookmarks, async () => {
+    await db.folders.put(snapshot.folder);
+    await Promise.all(
+      snapshot.assignments.map((assignment) =>
+        db.bookmarks.update(assignment.bookmarkId, {
+          folderId: assignment.folderId,
+          updatedAt: Date.now()
+        })
+      )
+    );
   });
 }
 
@@ -177,6 +279,19 @@ export async function moveBookmarksToFolder(bookmarkIds: string[], folderId?: st
       delete bookmark.folderId;
     }
     bookmark.updatedAt = Date.now();
+  });
+}
+
+export async function restoreBookmarkFolders(assignments: { bookmarkId: string; folderId?: string }[]) {
+  await db.transaction('rw', db.bookmarks, async () => {
+    await Promise.all(
+      assignments.map((assignment) =>
+        db.bookmarks.update(assignment.bookmarkId, {
+          folderId: assignment.folderId,
+          updatedAt: Date.now()
+        })
+      )
+    );
   });
 }
 
@@ -222,13 +337,35 @@ export async function removeTagFromBookmark(bookmarkId: string, tagId: string) {
   });
 }
 
-export async function deleteTag(tagId: string) {
+export async function deleteTag(tagId: string): Promise<TagRestoreSnapshot | null> {
+  const tag = await db.tags.get(tagId);
+  if (!tag) {
+    return null;
+  }
+
+  const bookmarkIds = (await db.bookmarks.filter((bookmark) => bookmark.tagIds.includes(tagId)).toArray()).map((bookmark) => bookmark.id);
+
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
     await db.bookmarks.filter((bookmark) => bookmark.tagIds.includes(tagId)).modify((bookmark) => {
       bookmark.tagIds = bookmark.tagIds.filter((id) => id !== tagId);
       bookmark.updatedAt = Date.now();
     });
     await db.tags.delete(tagId);
+  });
+
+  return { tag, bookmarkIds };
+}
+
+export async function restoreTag(snapshot: TagRestoreSnapshot) {
+  await db.transaction('rw', db.bookmarks, db.tags, async () => {
+    await db.tags.put(snapshot.tag);
+    await db.bookmarks.where('id').anyOf(snapshot.bookmarkIds).modify((bookmark) => {
+      if (!bookmark.tagIds.includes(snapshot.tag.id)) {
+        bookmark.tagIds.push(snapshot.tag.id);
+        bookmark.updatedAt = Date.now();
+      }
+    });
+    await recalculateTagUsage([snapshot.tag.id]);
   });
 }
 
@@ -308,4 +445,8 @@ export async function listTags() {
   const tags = await db.tags.orderBy('name').toArray();
   await recalculateTagUsage(tags.map((tag) => tag.id));
   return db.tags.orderBy('name').toArray();
+}
+
+export async function listImportSessions(limit = 8) {
+  return db.importSessions.orderBy('startedAt').reverse().limit(limit).toArray();
 }

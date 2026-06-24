@@ -1,4 +1,7 @@
+import { useEffect, useMemo, useState } from 'react';
+
 import type { SearchMatch } from '../../lib/search/searchBookmarks';
+import { Button } from '../../components/Button';
 import { BookmarkCard } from './BookmarkCard';
 
 interface BookmarkListProps {
@@ -16,6 +19,8 @@ interface BookmarkListProps {
   onSelectedChange: (bookmarkId: string, selected: boolean) => void;
 }
 
+const PAGE_SIZE = 120;
+
 export function BookmarkList({
   matches,
   totalCount,
@@ -30,6 +35,13 @@ export function BookmarkList({
   selectedIds,
   onSelectedChange
 }: BookmarkListProps) {
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
+  const visibleMatches = useMemo(() => matches.slice(0, visibleLimit), [matches, visibleLimit]);
+
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [matches]);
+
   if (loading) {
     return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">Loading bookmarks...</div>;
   }
@@ -56,7 +68,7 @@ export function BookmarkList({
 
   return (
     <div className="divide-y divide-border">
-      {matches.map(({ bookmark, matchedTerms }) => (
+      {visibleMatches.map(({ bookmark, matchedTerms }) => (
         <BookmarkCard
           key={bookmark.id}
           bookmark={bookmark}
@@ -70,6 +82,13 @@ export function BookmarkList({
           onSelectedChange={onSelectedChange}
         />
       ))}
+      {visibleMatches.length < matches.length ? (
+        <div className="flex items-center justify-center bg-background/60 p-4">
+          <Button onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
+            Show more ({matches.length - visibleMatches.length} remaining)
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

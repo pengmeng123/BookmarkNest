@@ -7,11 +7,16 @@ import {
   createTag,
   deleteFolder,
   deleteTag,
+  exportLocalBackup,
   getManageableBookmarkIds,
+  importLocalBackup,
+  listImportSessions,
   listBookmarkItems,
   moveBookmarksToFolder,
   removeTagFromBookmark,
   resetDomainData,
+  restoreFolder,
+  restoreTag,
   softDeleteBookmark,
   setBookmarkArchived,
   upsertBookmark
@@ -78,6 +83,19 @@ describe('bookmarkRepository', () => {
     expect(await db.folders.get(folder.id)).toBeUndefined();
   });
 
+  it('restores a deleted folder with bookmark assignments', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+    const folder = await createFolder('Ideas');
+    await moveBookmarksToFolder([inserted.bookmark.id], folder.id);
+
+    const snapshot = await deleteFolder(folder.id);
+    expect((await db.bookmarks.get(inserted.bookmark.id))?.folderId).toBeUndefined();
+
+    await restoreFolder(snapshot!);
+    expect((await db.bookmarks.get(inserted.bookmark.id))?.folderId).toBe(folder.id);
+    expect((await db.folders.get(folder.id))?.name).toBe('Ideas');
+  });
+
   it('removes deleted tags from every bookmark', async () => {
     const inserted = await upsertBookmark(bookmarkInput(1));
     const tag = await createTag('ai');
@@ -87,6 +105,19 @@ describe('bookmarkRepository', () => {
     const stored = await db.bookmarks.get(inserted.bookmark.id);
     expect(stored?.tagIds).not.toContain(tag.id);
     expect(await db.tags.get(tag.id)).toBeUndefined();
+  });
+
+  it('restores a deleted tag with bookmark assignments', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+    const tag = await createTag('ai');
+    await addTagToBookmarks([inserted.bookmark.id], tag.id);
+
+    const snapshot = await deleteTag(tag.id);
+    expect((await db.bookmarks.get(inserted.bookmark.id))?.tagIds).toEqual([]);
+
+    await restoreTag(snapshot!);
+    expect((await db.bookmarks.get(inserted.bookmark.id))?.tagIds).toContain(tag.id);
+    expect((await db.tags.get(tag.id))?.usageCount).toBe(1);
   });
 
   it('updates tag usage when adding and removing tags', async () => {
@@ -196,5 +227,34 @@ describe('bookmarkRepository', () => {
 
     expect(proItems).toHaveLength(205);
     expect(proItems.filter((item) => item.locked)).toHaveLength(0);
+  });
+
+  it('exports and imports a full local backup', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+    const folder = await createFolder('Backup');
+    const tag = await createTag('restore');
+    await moveBookmarksToFolder([inserted.bookmark.id], folder.id);
+    await addTagToBookmarks([inserted.bookmark.id], tag.id);
+    await db.importSessions.add({
+      id: 'import_test',
+      startedAt: 1,
+      finishedAt: 2,
+      sourceUrl: 'https://x.com/i/bookmarks',
+      foundCount: 1,
+      insertedCount: 1,
+      updatedCount: 0,
+      duplicateCount: 0,
+      failedCount: 0,
+      status: 'completed'
+    });
+
+    const backup = await exportLocalBackup();
+    await resetDomainData();
+    await importLocalBackup(backup);
+
+    const [item] = await listBookmarkItems({ isPro: true });
+    expect(item.folder?.name).toBe('Backup');
+    expect(item.tags.map((itemTag) => itemTag.name)).toEqual(['restore']);
+    expect(await listImportSessions()).toHaveLength(1);
   });
 });

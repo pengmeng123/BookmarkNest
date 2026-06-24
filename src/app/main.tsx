@@ -4,6 +4,7 @@ import {
   FileJson,
   FileSpreadsheet,
   Folder,
+  History,
   Inbox,
   LoaderCircle,
   MoreHorizontal,
@@ -30,7 +31,10 @@ import {
   moveBookmarksToFolder,
   removeTagFromBookmark,
   renameFolder,
+  restoreBookmarkFolders,
   restoreBookmarks,
+  restoreFolder,
+  restoreTag,
   setBookmarkArchived,
   softDeleteBookmark,
   addTagToBookmarks,
@@ -40,6 +44,7 @@ import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import { cn } from '../lib/utils/cn';
 import { searchBookmarks } from '../lib/search/searchBookmarks';
 import { downloadBookmarks } from '../lib/export/download';
+import type { ImportSession } from '../shared/types';
 import '../styles/globals.css';
 import { BookmarkList } from './components/BookmarkList';
 import { MoveDialog } from './components/MoveDialog';
@@ -61,7 +66,7 @@ type ConfirmDialogState =
   | null;
 type TagDialogState = { kind: 'add' | 'remove'; bookmarkIds: string[]; bookmarkId?: string } | null;
 type ImportStatus = { type: 'loading' | 'success' | 'error'; message: string } | null;
-type ActionToast = { type: 'success' | 'error'; message: string; undoBookmarkIds?: string[] } | null;
+type ActionToast = { type: 'success' | 'error'; message: string; onUndo?: () => Promise<void> } | null;
 
 function formatImportError(error?: string) {
   if (!error) {
@@ -73,6 +78,50 @@ function formatImportError(error?: string) {
   }
 
   return error;
+}
+
+function formatShortDate(timestamp?: number) {
+  if (!timestamp) {
+    return 'Running';
+  }
+
+  return new Intl.DateTimeFormat('en', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(timestamp);
+}
+
+function ImportHistory({ sessions }: { sessions: ImportSession[] }) {
+  if (!sessions.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-4 rounded-app border border-border bg-surface p-3 shadow-sm">
+      <div className="flex items-center gap-2 px-1">
+        <History size={15} className="text-muted-foreground" />
+        <h2 className="text-sm font-semibold">Recent imports</h2>
+      </div>
+      <div className="mt-3 space-y-2">
+        {sessions.slice(0, 4).map((session) => (
+          <div key={session.id} className="rounded-app border border-border bg-background px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium capitalize text-foreground">{session.status}</span>
+              <span className="text-muted-foreground">{formatShortDate(session.finishedAt ?? session.startedAt)}</span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
+              <span>{session.insertedCount} new</span>
+              <span>{session.duplicateCount} duplicate</span>
+              <span>{session.failedCount} failed</span>
+              <span>{session.foundCount} found</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function AppSidebar({
@@ -466,7 +515,7 @@ function App() {
     await runDialogAction(async () => {
       if (confirmDialog.kind === 'delete-folder') {
         const wasViewingDeletedFolder = folderId === confirmDialog.folderId;
-        await deleteFolder(confirmDialog.folderId);
+        const snapshot = await deleteFolder(confirmDialog.folderId);
         setSelectedIds(new Set());
         setConfirmDialog(null);
 
@@ -475,22 +524,58 @@ function App() {
         } else {
           await library.refresh();
         }
+        if (snapshot) {
+          setActionToast({
+            type: 'success',
+            message: 'Folder deleted.',
+            onUndo: async () => {
+              await restoreFolder(snapshot);
+              await library.refresh();
+            }
+          });
+        }
         return;
       }
 
       if (confirmDialog.kind === 'delete-tag') {
-        await refreshAfter(deleteTag(confirmDialog.tagId));
+        const snapshot = await deleteTag(confirmDialog.tagId);
+        await library.refresh();
+        setSelectedIds(new Set());
         setTagId(undefined);
+        if (snapshot) {
+          setActionToast({
+            type: 'success',
+            message: 'Tag deleted.',
+            onUndo: async () => {
+              await restoreTag(snapshot);
+              await library.refresh();
+            }
+          });
+        }
       }
       if (confirmDialog.kind === 'delete-bookmark') {
         const deletedIds = [confirmDialog.bookmarkId];
         await refreshAfter(softDeleteBookmark(confirmDialog.bookmarkId));
-        setActionToast({ type: 'success', message: 'Bookmark deleted.', undoBookmarkIds: deletedIds });
+        setActionToast({
+          type: 'success',
+          message: 'Bookmark deleted.',
+          onUndo: async () => {
+            await restoreBookmarks(deletedIds);
+            await library.refresh();
+          }
+        });
       }
       if (confirmDialog.kind === 'bulk-delete') {
         const deletedIds = Array.from(selectedIds);
         await refreshAfter(Promise.all(deletedIds.map((bookmarkId) => softDeleteBookmark(bookmarkId))));
-        setActionToast({ type: 'success', message: `${deletedIds.length} bookmarks deleted.`, undoBookmarkIds: deletedIds });
+        setActionToast({
+          type: 'success',
+          message: `${deletedIds.length} bookmarks deleted.`,
+          onUndo: async () => {
+            await restoreBookmarks(deletedIds);
+            await library.refresh();
+          }
+        });
       }
       setConfirmDialog(null);
     });
@@ -513,8 +598,20 @@ function App() {
       return;
     }
     await runDialogAction(async () => {
+      const previousFolders = moveTargetIds.map((bookmarkId) => ({
+        bookmarkId,
+        folderId: library.bookmarks.find((bookmark) => bookmark.id === bookmarkId)?.folderId
+      }));
       await refreshAfter(moveBookmarksToFolder(moveTargetIds, folderId));
       setMoveTargetIds(null);
+      setActionToast({
+        type: 'success',
+        message: `${moveTargetIds.length === 1 ? 'Bookmark' : 'Bookmarks'} moved.`,
+        onUndo: async () => {
+          await restoreBookmarkFolders(previousFolders);
+          await library.refresh();
+        }
+      });
     });
   }
 
@@ -523,10 +620,26 @@ function App() {
       return;
     }
     await runDialogAction(async () => {
+      const targetIds = [...moveTargetIds];
+      const previousFolders = targetIds.map((bookmarkId) => ({
+        bookmarkId,
+        folderId: library.bookmarks.find((bookmark) => bookmark.id === bookmarkId)?.folderId
+      }));
       const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
       const folder = existing ?? (await createFolder(folderName));
-      await refreshAfter(moveBookmarksToFolder(moveTargetIds, folder.id));
+      await refreshAfter(moveBookmarksToFolder(targetIds, folder.id));
       setMoveTargetIds(null);
+      setActionToast({
+        type: 'success',
+        message: `${targetIds.length === 1 ? 'Bookmark' : 'Bookmarks'} moved.`,
+        onUndo: async () => {
+          await restoreBookmarkFolders(previousFolders);
+          if (!existing) {
+            await deleteFolder(folder.id);
+          }
+          await library.refresh();
+        }
+      });
     });
   }
 
@@ -574,6 +687,17 @@ function App() {
       const tag = existing ?? (await createTag(tagName));
       await refreshAfter(addTagToBookmarks(tagDialog.bookmarkIds, tag.id));
       setTagDialog(null);
+      setActionToast({
+        type: 'success',
+        message: `${tagDialog.bookmarkIds.length === 1 ? 'Tag' : 'Tags'} added.`,
+        onUndo: async () => {
+          await Promise.all(tagDialog.bookmarkIds.map((bookmarkId) => removeTagFromBookmark(bookmarkId, tag.id)));
+          if (!existing) {
+            await deleteTag(tag.id);
+          }
+          await library.refresh();
+        }
+      });
     });
   }
 
@@ -631,7 +755,7 @@ function App() {
       message: mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...'
     });
     try {
-      const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number } }>({
+      const response = await sendRuntimeMessage<{ session?: ImportSession }>({
         type: 'START_X_IMPORT',
         mode
       });
@@ -647,7 +771,7 @@ function App() {
         session
           ? {
               type: 'success',
-              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed.`
+              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} found.`
             }
           : { type: 'success', message: 'Import complete.' }
       );
@@ -706,11 +830,10 @@ function App() {
     setSelectedIds(new Set());
   }
 
-  async function handleUndoDelete(bookmarkIds: string[]) {
+  async function handleUndoAction(onUndo: () => Promise<void>) {
     try {
-      await restoreBookmarks(bookmarkIds);
-      await library.refresh();
-      setActionToast({ type: 'success', message: `${bookmarkIds.length === 1 ? 'Bookmark' : 'Bookmarks'} restored.` });
+      await onUndo();
+      setActionToast({ type: 'success', message: 'Action undone.' });
     } catch (error) {
       setActionToast({ type: 'error', message: formatActionError(error) });
     }
@@ -789,6 +912,9 @@ function App() {
           onDeleteFolder={(nextFolderId) => void handleDeleteFolder(nextFolderId)}
           onDeleteTag={(nextTagId) => void handleDeleteTag(nextTagId)}
         />
+        <div className="lg:hidden">
+          <ImportHistory sessions={library.importSessions} />
+        </div>
         <div className="overflow-hidden rounded-app border border-border bg-surface shadow-sm">
           <div className="border-b border-border bg-surface p-4">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -927,8 +1053,8 @@ function App() {
           role="status"
         >
           <span className="min-w-0 flex-1">{actionToast.message}</span>
-          {actionToast.undoBookmarkIds?.length ? (
-            <Button size="xs" onClick={() => void handleUndoDelete(actionToast.undoBookmarkIds ?? [])}>
+          {actionToast.onUndo ? (
+            <Button size="xs" onClick={() => void handleUndoAction(actionToast.onUndo as () => Promise<void>)}>
               Undo
             </Button>
           ) : null}
@@ -941,6 +1067,9 @@ function App() {
           </button>
         </div>
       ) : null}
+      <div className="hidden lg:fixed lg:bottom-4 lg:left-4 lg:block lg:w-[280px]">
+        <ImportHistory sessions={library.importSessions} />
+      </div>
     </PageShell>
   );
 }
