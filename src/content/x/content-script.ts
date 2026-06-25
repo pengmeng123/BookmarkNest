@@ -1,84 +1,299 @@
 import type { ExtensionMessage, MessageResponse } from '../../shared/types';
-import { runImportFromLoadedCards, runImportWithAutoScroll, type AutoScrollProgress } from './importRunner';
+import type { BookmarkInput } from '../../shared/types';
+import { runImportFromLoadedCards, runImportWithAutoScroll } from './importRunner';
 import { parseGraphqlBookmarks, type GraphqlBookmark } from './graphqlParser';
 import { isXBookmarkPage } from './pageDetection';
 import { parseLoadedBookmarkCards } from './parser';
 
-const CONTROL_ID = 'bookmarknest-import-control';
-const CONTROL_STYLE_ID = 'bookmarknest-import-control-style';
-const CONTROL_VERSION = 'auto-scroll-v3';
-const ENABLE_FLOATING_IMPORT_CONTROL = false;
 const GRAPHQL_EVENT_NAME = 'bookmarknest:x-graphql-response';
 const REQUEST_EVENT_NAME = 'bookmarknest:x-bookmarks-request';
 const FETCH_ALL_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks';
 const FETCH_ALL_PROGRESS_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks-progress';
+const FETCH_ALL_CANCEL_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks-cancel';
+const WIDGET_HOST_ID = 'bookmarknest-import-widget';
+
 let currentImportController: { cancelled: boolean } | null = null;
 const capturedBookmarks = new Map<string, GraphqlBookmark>();
 
-function ensureControlStyle() {
-  if (document.getElementById(CONTROL_STYLE_ID)) {
+// ─── Widget ─────────────────────────────────────────────
+
+type WidgetState = 'idle' | 'fetching' | 'saving' | 'done' | 'error' | 'partial';
+
+interface WidgetRef {
+  host: HTMLElement;
+  root: ShadowRoot;
+  btn: HTMLButtonElement;
+  icon: HTMLElement;
+  label: HTMLElement;
+  sub: HTMLElement;
+  barFill: HTMLElement;
+  state: WidgetState;
+}
+
+let widget: WidgetRef | null = null;
+let autoHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+const ICONS = {
+  import: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v7.5M5.5 7L8 9.5 10.5 7"/><path d="M3 11v2.5h10V11"/></svg>',
+  check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>',
+  warn: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5L1 14h14z"/><path d="M8 6v3.5M8 12v.5"/></svg>',
+  spinner: '<div class="spinner"></div>',
+};
+
+function widgetCSS() {
+  return `
+    :host {
+      all: initial !important;
+      position: fixed !important;
+      bottom: 20px !important;
+      right: 20px !important;
+      z-index: 2147483647 !important;
+      display: block !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 18px;
+      height: 44px;
+      border-radius: 22px;
+      border: none;
+      cursor: pointer;
+      font: 600 14px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      letter-spacing: -0.01em;
+      color: #fff;
+      background: #1d9bf0;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.06);
+      transition: background 0.25s, border-color 0.25s, box-shadow 0.25s, transform 0.15s;
+      position: relative;
+      overflow: hidden;
+      max-width: 340px;
+      white-space: nowrap;
+      animation: bn-slideUp 0.35s cubic-bezier(0.34,1.56,0.64,1);
+      -webkit-font-smoothing: antialiased;
+    }
+    .btn:hover {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.08);
+    }
+    .btn:active { transform: translateY(0) scale(0.98); }
+    .btn:focus-visible { outline: 2px solid #1d9bf0; outline-offset: 2px; }
+
+    /* States */
+    .btn[data-state="fetching"],
+    .btn[data-state="saving"] {
+      background: rgba(22,24,28,0.95);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+    .btn[data-state="done"] { background: #00ba7c; }
+    .btn[data-state="error"] {
+      background: rgba(22,24,28,0.95);
+      border: 1px solid rgba(244,33,46,0.4);
+    }
+    .btn[data-state="partial"] {
+      background: rgba(22,24,28,0.95);
+      border: 1px solid rgba(255,212,0,0.4);
+    }
+
+    /* Icon */
+    .icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }
+    .icon svg { width: 16px; height: 16px; }
+
+    /* Spinner */
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.2);
+      border-top-color: #1d9bf0;
+      border-radius: 50%;
+      animation: bn-spin 0.7s linear infinite;
+    }
+    .btn[data-state="saving"] .spinner { border-top-color: #00ba7c; }
+
+    /* Text */
+    .label { flex-shrink: 0; }
+    .sub {
+      font-weight: 400;
+      font-size: 12px;
+      opacity: 0.6;
+      margin-left: 2px;
+    }
+    .sub:empty { display: none; }
+
+    /* Progress bar */
+    .bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(255,255,255,0.06);
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+    .btn[data-state="fetching"] .bar { opacity: 1; }
+    .bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1d9bf0, #4db8ff);
+      border-radius: 0 2px 2px 0;
+      transition: width 0.5s ease;
+      width: 0%;
+    }
+
+    /* Animations */
+    @keyframes bn-slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes bn-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Responsive */
+    @media (max-width: 720px) {
+      :host {
+        right: 16px !important;
+        bottom: 72px !important;
+      }
+      .btn { height: 40px; padding: 0 14px; font-size: 13px; }
+    }
+  `;
+}
+
+function mountWidget(): WidgetRef {
+  const host = document.createElement('div');
+  host.id = WIDGET_HOST_ID;
+  const root = host.attachShadow({ mode: 'closed' });
+
+  const style = document.createElement('style');
+  style.textContent = widgetCSS();
+
+  const btn = document.createElement('button');
+  btn.className = 'btn';
+  btn.type = 'button';
+  btn.dataset.state = 'idle';
+  btn.setAttribute('aria-label', 'Import X bookmarks to BookmarkNest');
+
+  const icon = document.createElement('span');
+  icon.className = 'icon';
+  icon.innerHTML = ICONS.import;
+
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = 'Import Bookmarks';
+
+  const sub = document.createElement('span');
+  sub.className = 'sub';
+
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const barFill = document.createElement('div');
+  barFill.className = 'bar-fill';
+  bar.appendChild(barFill);
+
+  btn.append(icon, label, sub, bar);
+  root.append(style, btn);
+
+  btn.addEventListener('click', onWidgetClick);
+
+  const ref: WidgetRef = { host, root, btn, icon, label, sub, barFill, state: 'idle' };
+  document.documentElement.appendChild(host);
+  return ref;
+}
+
+function onWidgetClick() {
+  if (!widget) return;
+  switch (widget.state) {
+    case 'idle':
+    case 'error':
+      void startImport('auto-scroll');
+      break;
+    case 'fetching':
+    case 'saving':
+      if (currentImportController) {
+        currentImportController.cancelled = true;
+      }
+      break;
+    case 'done':
+    case 'partial':
+      chrome.runtime.sendMessage({ type: 'OPEN_APP' });
+      break;
+  }
+}
+
+function setWidget(state: WidgetState, labelText: string, subText = '', progress = -1) {
+  if (!widget) return;
+
+  if (autoHideTimer) {
+    clearTimeout(autoHideTimer);
+    autoHideTimer = null;
+  }
+
+  widget.state = state;
+  widget.btn.dataset.state = state;
+  widget.label.textContent = labelText;
+  widget.sub.textContent = subText;
+
+  const iconMap: Record<WidgetState, string> = {
+    idle: ICONS.import,
+    fetching: ICONS.spinner,
+    saving: ICONS.spinner,
+    done: ICONS.check,
+    error: ICONS.warn,
+    partial: ICONS.warn,
+  };
+  widget.icon.innerHTML = iconMap[state];
+
+  if (progress >= 0 && progress <= 1) {
+    widget.barFill.style.width = `${Math.round(progress * 100)}%`;
+  }
+
+  widget.btn.setAttribute('aria-label',
+    state === 'fetching' || state === 'saving'
+      ? 'Click to cancel import'
+      : state === 'done' || state === 'partial'
+        ? 'Open BookmarkNest library'
+        : 'Import X bookmarks to BookmarkNest'
+  );
+
+  if (state === 'done' || state === 'error' || state === 'partial') {
+    autoHideTimer = setTimeout(() => {
+      setWidget('idle', 'Import Bookmarks');
+    }, state === 'done' ? 5000 : 6000);
+  }
+}
+
+function ensureWidget() {
+  if (!isXBookmarkPage(window.location.href)) {
+    if (widget) {
+      widget.host.remove();
+      widget = null;
+    }
     return;
   }
 
-  const style = document.createElement('style');
-  style.id = CONTROL_STYLE_ID;
-  style.textContent = `
-    #${CONTROL_ID}[data-loading="true"] > span {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(255, 255, 255, 0.45);
-      border-top-color: #fff;
-      border-radius: 999px;
-      animation: bookmarknest-spin 0.75s linear infinite;
-      flex: 0 0 auto;
-    }
-
-    @keyframes bookmarknest-spin {
-      to {
-        transform: rotate(360deg);
-      }
-    }
-
-    @media (max-width: 720px) {
-      #${CONTROL_ID} {
-        right: 76px !important;
-        bottom: 16px !important;
-        max-width: 160px !important;
-      }
-    }
-  `;
-  document.documentElement.append(style);
-}
-
-function setControlLoading(button: HTMLElement, loading: boolean) {
-  button.toggleAttribute('aria-busy', loading);
-  button.dataset.loading = loading ? 'true' : 'false';
-}
-
-function setControlText(button: HTMLElement, text: string, loading = false) {
-  button.replaceChildren();
-  if (loading) {
-    const spinner = document.createElement('span');
-    spinner.setAttribute('aria-hidden', 'true');
-    button.append(spinner);
-  }
-  button.append(document.createTextNode(text));
-  setControlLoading(button, loading);
-}
-
-function formatAutoScrollProgress(progress: AutoScrollProgress) {
-  if (progress.phase === 'scanning') {
-    return `Scanning: ${progress.uniqueCount} found`;
+  if (widget && document.getElementById(WIDGET_HOST_ID)) {
+    return;
   }
 
-  if (progress.phase === 'settled') {
-    return progress.reachedEnd ? `Reached end: ${progress.uniqueCount}` : `Ready: ${progress.uniqueCount} found`;
-  }
-
-  return `Scroll ${progress.scrolls}/${progress.maxScrolls}: ${progress.uniqueCount}`;
+  widget = mountWidget();
 }
 
-function getCapturedBookmarks() {
+// ─── Helpers ────────────────────────────────────────────
+
+function getCapturedBookmarks(): BookmarkInput[] {
   return Array.from(capturedBookmarks.values())
     .sort((left, right) => {
       if (left.sortIndex && right.sortIndex && left.sortIndex !== right.sortIndex) {
@@ -97,59 +312,6 @@ function createRequestId() {
     return `bookmarknest_${globalThis.crypto.randomUUID()}`;
   }
   return `bookmarknest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
-function fetchAllBookmarkPages(
-  controller: { cancelled: boolean },
-  onProgress: (progress: { phase: 'fetching' | 'done' | 'error'; page?: number; error?: string }) => void
-) {
-  const requestId = createRequestId();
-
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        window.removeEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
-        resolve(false);
-      }
-    }, 120000);
-
-    function finish(result: boolean) {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      window.clearTimeout(timeoutId);
-      window.removeEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
-      resolve(result);
-    }
-
-    function handleProgress(event: Event) {
-      const detail = (event as CustomEvent<{ requestId?: string; phase?: string; page?: number; error?: string }>).detail;
-      if (detail?.requestId !== requestId) {
-        return;
-      }
-
-      if (controller.cancelled) {
-        finish(false);
-        return;
-      }
-
-      if (detail.phase === 'fetching') {
-        onProgress({ phase: 'fetching', page: detail.page });
-      } else if (detail.phase === 'done') {
-        onProgress({ phase: 'done' });
-        finish(true);
-      } else if (detail.phase === 'error') {
-        onProgress({ phase: 'error', error: detail.error });
-        finish(false);
-      }
-    }
-
-    window.addEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
-    window.dispatchEvent(new CustomEvent(FETCH_ALL_EVENT_NAME, { detail: { requestId, maxPages: 120 } }));
-  });
 }
 
 function sleep(ms: number) {
@@ -211,6 +373,172 @@ async function collectLoadedBookmarkMetadata(tweetIds: string[] = [], autoScroll
   return Array.from(collected.values());
 }
 
+// ─── Import Flow ────────────────────────────────────────
+
+type FetchAllResult = 'done' | 'partial' | 'error';
+
+function fetchAllBookmarkPages(
+  controller: { cancelled: boolean },
+  onProgress: (detail: { phase: string; page?: number; pages?: number; error?: string }) => void
+): Promise<FetchAllResult> {
+  const requestId = createRequestId();
+
+  return new Promise<FetchAllResult>((resolve) => {
+    let settled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(capturedBookmarks.size > 0 ? 'partial' : 'error');
+    }, 180_000);
+
+    function cleanup() {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
+    }
+
+    function finish(result: FetchAllResult) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    }
+
+    function handleProgress(event: Event) {
+      const detail = (event as CustomEvent<{
+        requestId?: string;
+        phase?: string;
+        page?: number;
+        pages?: number;
+        error?: string;
+      }>).detail;
+      if (detail?.requestId !== requestId) return;
+
+      if (controller.cancelled) {
+        window.dispatchEvent(new CustomEvent(FETCH_ALL_CANCEL_EVENT_NAME, { detail: { requestId } }));
+        finish(capturedBookmarks.size > 0 ? 'partial' : 'error');
+        return;
+      }
+
+      switch (detail.phase) {
+        case 'fetching':
+          onProgress({ phase: 'fetching', page: detail.page });
+          break;
+        case 'done':
+          onProgress({ phase: 'done', pages: detail.pages });
+          finish('done');
+          break;
+        case 'partial':
+          onProgress({ phase: 'partial', pages: detail.pages, error: detail.error });
+          finish('partial');
+          break;
+        case 'error':
+          onProgress({ phase: 'error', error: detail.error });
+          finish('error');
+          break;
+      }
+    }
+
+    window.addEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
+    window.dispatchEvent(new CustomEvent(FETCH_ALL_EVENT_NAME, { detail: { requestId, maxPages: 120 } }));
+  });
+}
+
+async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise<MessageResponse> {
+  if (!isXBookmarkPage(window.location.href)) {
+    return { ok: false, error: 'Current page is not an X bookmarks page.' };
+  }
+
+  if (currentImportController && !currentImportController.cancelled) {
+    return { ok: false, error: 'Import already in progress.' };
+  }
+
+  currentImportController = { cancelled: false };
+  setWidget('fetching', 'Starting...', '', 0);
+
+  try {
+    if (mode === 'auto-scroll') {
+      const fetchResult = await fetchAllBookmarkPages(currentImportController, (progress) => {
+        if (progress.phase === 'fetching') {
+          const count = capturedBookmarks.size;
+          const page = progress.page ?? 1;
+          setWidget('fetching', `${count} found`, `page ${page}`, Math.min(page / 120, 0.95));
+        } else if (progress.phase === 'done' || progress.phase === 'partial') {
+          setWidget('saving', `Saving ${capturedBookmarks.size}...`);
+        }
+      });
+
+      if (currentImportController.cancelled) {
+        if (capturedBookmarks.size > 0) {
+          setWidget('saving', `Saving ${capturedBookmarks.size}...`);
+          const result = await runImportWithAutoScroll(
+            window.location.href, document, undefined, undefined,
+            { apiBookmarks: getCapturedBookmarks, maxScrolls: 0 }
+          );
+          setWidget('partial', `${result.session.insertedCount} saved`, 'cancelled');
+          return { ok: true, data: { status: 'cancelled', ...result } };
+        }
+        setWidget('idle', 'Import Bookmarks');
+        return { ok: false, error: 'Import cancelled.' };
+      }
+
+      if (fetchResult === 'error' && capturedBookmarks.size === 0) {
+        setWidget('error', 'Import failed', 'No bookmarks found');
+        return { ok: false, error: 'Unable to fetch X bookmarks through the API.' };
+      }
+
+      if (capturedBookmarks.size === 0) {
+        setWidget('error', 'No bookmarks', 'Try refreshing');
+        return { ok: false, error: 'The X Bookmarks API returned no bookmark items.' };
+      }
+
+      setWidget('saving', `Saving ${capturedBookmarks.size}...`);
+      const result = await runImportWithAutoScroll(
+        window.location.href, document, currentImportController, undefined,
+        { apiBookmarks: getCapturedBookmarks, maxScrolls: 0 }
+      );
+
+      if (fetchResult === 'partial') {
+        setWidget('partial', `${result.session.insertedCount} saved`, 'some pages failed');
+      } else {
+        const dupText = result.session.duplicateCount > 0 ? `${result.session.duplicateCount} dup` : '';
+        setWidget('done', `${result.session.insertedCount} saved`, dupText);
+      }
+
+      return { ok: true, data: { status: result.session.status, ...result } };
+    }
+
+    // Visible mode
+    setWidget('saving', 'Importing...');
+    const result = await runImportFromLoadedCards(
+      window.location.href, document, currentImportController,
+      (session) => {
+        if (session.status === 'running') {
+          const processed = session.insertedCount + session.duplicateCount + session.failedCount;
+          setWidget('saving', `${processed}/${session.foundCount}`);
+        }
+      },
+      { apiBookmarks: getCapturedBookmarks }
+    );
+
+    if (result.session.status === 'cancelled') {
+      setWidget('partial', `${result.session.insertedCount} saved`, 'cancelled');
+    } else {
+      setWidget('done', `${result.session.insertedCount} saved`);
+    }
+
+    return { ok: true, data: { status: result.session.status, ...result } };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : '';
+    setWidget('error', 'Import failed', msg.length > 40 ? msg.slice(0, 40) + '…' : msg);
+    return { ok: false, error: error instanceof Error ? error.message : 'Unable to import bookmarks.' };
+  } finally {
+    currentImportController = null;
+  }
+}
+
+// ─── Event Listeners ────────────────────────────────────
+
 window.addEventListener(GRAPHQL_EVENT_NAME, (event) => {
   const detail = (event as CustomEvent<{ body?: unknown }>).detail;
   const bookmarks = parseGraphqlBookmarks(detail?.body);
@@ -248,161 +576,27 @@ window.addEventListener(REQUEST_EVENT_NAME, (event) => {
   });
 });
 
-function ensureImportControl() {
-  if (!ENABLE_FLOATING_IMPORT_CONTROL) {
-    document.getElementById(CONTROL_ID)?.remove();
-    return;
-  }
+// ─── Widget Mount & SPA Navigation ─────────────────────
 
-  if (!isXBookmarkPage(window.location.href)) {
-    document.getElementById(CONTROL_ID)?.remove();
-    return;
-  }
-
-  const existingControl = document.getElementById(CONTROL_ID);
-  if (existingControl instanceof HTMLButtonElement && existingControl.dataset.version === CONTROL_VERSION) {
-    return;
-  }
-
-  existingControl?.remove();
-  ensureControlStyle();
-
-  const button = document.createElement('button');
-  button.id = CONTROL_ID;
-  button.type = 'button';
-  button.dataset.version = CONTROL_VERSION;
-  setControlText(button, 'Import more');
-  button.setAttribute('aria-label', 'Import more X bookmarks to BookmarkNest');
-  button.style.position = 'fixed';
-  button.style.right = '88px';
-  button.style.bottom = '16px';
-  button.style.zIndex = '2147483647';
-  button.style.border = '0';
-  button.style.borderRadius = '999px';
-  button.style.padding = '8px 11px';
-  button.style.background = '#14786f';
-  button.style.color = '#fff';
-  button.style.display = 'inline-flex';
-  button.style.alignItems = 'center';
-  button.style.gap = '8px';
-  button.style.minHeight = '36px';
-  button.style.maxWidth = '190px';
-  button.style.whiteSpace = 'nowrap';
-  button.style.font = '600 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-  button.style.boxShadow = '0 6px 18px rgba(0, 0, 0, 0.18)';
-  button.style.cursor = 'pointer';
-  button.onclick = () => {
-    if (currentImportController) {
-      currentImportController.cancelled = true;
-      setControlText(button, 'Cancelling...', true);
-      return;
-    }
-
-    setControlText(button, 'Starting...', true);
-    void startImport('auto-scroll');
-  };
-
-  document.documentElement.append(button);
-}
-
-async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise<MessageResponse> {
-  if (!isXBookmarkPage(window.location.href)) {
-    return { ok: false, error: 'Current page is not an X bookmarks page.' };
-  }
-
-  const control = document.getElementById(CONTROL_ID);
-  if (control) {
-    setControlText(control, 'Importing...', true);
-  }
-
-  currentImportController = { cancelled: false };
-
-  try {
-    if (mode === 'auto-scroll') {
-      const apiCompleted = await fetchAllBookmarkPages(currentImportController, (progress) => {
-        if (!control) {
-          return;
-        }
-        if (progress.phase === 'fetching') {
-          setControlText(control, `API page ${progress.page ?? 1}: ${capturedBookmarks.size}`, true);
-        } else if (progress.phase === 'done') {
-          setControlText(control, `API done: ${capturedBookmarks.size}`, true);
-        } else if (progress.phase === 'error') {
-          setControlText(control, progress.error ?? 'API fallback', true);
-        }
-      });
-
-      if (!apiCompleted) {
-        throw new Error('Unable to fetch all X bookmarks through the Bookmarks API.');
-      }
-
-      if (capturedBookmarks.size === 0) {
-        throw new Error('The X Bookmarks API returned no bookmark items.');
-      }
-
-      const result = await runImportWithAutoScroll(window.location.href, document, currentImportController, (progress) => {
-        if (control) {
-          const apiCount = capturedBookmarks.size;
-          setControlText(control, apiCount > progress.uniqueCount ? `API ${apiCount} found` : formatAutoScrollProgress(progress), true);
-        }
-      }, { apiBookmarks: getCapturedBookmarks, maxScrolls: 0 });
-
-      if (control) {
-        setControlText(
-          control,
-          result.session.status === 'cancelled'
-            ? `Cancelled: ${result.session.insertedCount} saved`
-            : `Done: ${result.session.insertedCount} new`
-        );
-      }
-
-      return { ok: true, data: { status: result.session.status, ...result } };
-    }
-
-    const result = await runImportFromLoadedCards(window.location.href, document, currentImportController, (session) => {
-      if (control) {
-        const processed = session.insertedCount + session.duplicateCount + session.failedCount;
-        setControlText(
-          control,
-          session.status === 'running'
-            ? `Importing ${processed}/${session.foundCount} - click to cancel`
-            : `${session.status}: ${session.insertedCount} new, ${session.duplicateCount} duplicate`,
-          session.status === 'running'
-        );
-      }
-    }, { apiBookmarks: getCapturedBookmarks });
-
-    if (control) {
-      setControlText(
-        control,
-        result.session.status === 'cancelled'
-          ? `Cancelled: ${result.session.insertedCount} saved`
-          : `Done: ${result.session.insertedCount} new`
-      );
-    }
-
-    return { ok: true, data: { status: result.session.status, ...result } };
-  } catch (error) {
-    if (control) {
-      setControlText(control, 'Import failed');
-    }
-    return { ok: false, error: error instanceof Error ? error.message : 'Unable to import the current X bookmarks page.' };
-  } finally {
-    currentImportController = null;
-  }
-}
-
-ensureImportControl();
+ensureWidget();
 
 let lastUrl = window.location.href;
+let widgetCheckScheduled = false;
 const observer = new MutationObserver(() => {
   if (window.location.href !== lastUrl) {
     lastUrl = window.location.href;
   }
-  ensureImportControl();
+  if (!widgetCheckScheduled) {
+    widgetCheckScheduled = true;
+    requestAnimationFrame(() => {
+      widgetCheckScheduled = false;
+      ensureWidget();
+    });
+  }
 });
-
 observer.observe(document.documentElement, { childList: true, subtree: true });
+
+// ─── Chrome Message Handler ─────────────────────────────
 
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   if (message.type === 'START_X_IMPORT') {

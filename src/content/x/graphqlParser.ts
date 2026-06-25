@@ -72,10 +72,19 @@ function findUserLegacy(value: unknown): Record<string, unknown> | null {
     return legacy;
   }
 
-  for (const key of ['result', 'user', 'user_results']) {
+  for (const key of ['result', 'user', 'user_results', 'user_result']) {
     const nested = findUserLegacy(value[key]);
     if (nested) {
       return nested;
+    }
+  }
+
+  for (const nestedValue of Object.values(value)) {
+    if (isRecord(nestedValue)) {
+      const nested = findUserLegacy(nestedValue);
+      if (nested) {
+        return nested;
+      }
     }
   }
 
@@ -177,6 +186,34 @@ function parseMediaUrls(legacy: Record<string, unknown>) {
     .filter((url): url is string => Boolean(url));
 }
 
+function expandTcoUrls(text: string, legacy: Record<string, unknown>): string {
+  const entities = isRecord(legacy.entities) ? legacy.entities : undefined;
+  const extendedEntities = isRecord(legacy.extended_entities) ? legacy.extended_entities : undefined;
+  const urls = Array.isArray(entities?.urls) ? entities.urls : [];
+  let expanded = text;
+
+  for (const entry of urls) {
+    if (!isRecord(entry)) continue;
+    const tco = stringValue(entry.url);
+    const full = stringValue(entry.expanded_url);
+    if (tco && full) {
+      expanded = expanded.replaceAll(tco, full);
+    }
+  }
+
+  const mediaEntities = Array.isArray(extendedEntities?.media) ? extendedEntities.media
+    : Array.isArray(entities?.media) ? entities.media : [];
+  for (const entry of mediaEntities) {
+    if (!isRecord(entry)) continue;
+    const tco = stringValue(entry.url);
+    if (tco) {
+      expanded = expanded.replaceAll(tco, '').trim();
+    }
+  }
+
+  return expanded;
+}
+
 function parseTweet(tweet: Record<string, unknown>, sortIndex?: string): GraphqlBookmark | null {
   const legacy = isRecord(tweet.legacy) ? tweet.legacy : undefined;
   if (!legacy) {
@@ -187,13 +224,14 @@ function parseTweet(tweet: Record<string, unknown>, sortIndex?: string): Graphql
   const noteTweet = isRecord(tweet.note_tweet) ? tweet.note_tweet : undefined;
   const noteTweetResults = isRecord(noteTweet?.note_tweet_results) ? noteTweet.note_tweet_results : undefined;
   const noteTweetResult = isRecord(noteTweetResults?.result) ? noteTweetResults.result : undefined;
-  const contentText = stringValue(noteTweetResult?.text) ?? stringValue(legacy.full_text);
-  if (!tweetId || !contentText) {
+  const rawText = stringValue(noteTweetResult?.text) ?? stringValue(legacy.full_text);
+  if (!tweetId || !rawText) {
     return null;
   }
 
-  const userLegacy = isRecord(tweet.core) ? findUserLegacy(tweet.core) : null;
-  const userId = isRecord(tweet.core) ? findUserId(tweet.core) : undefined;
+  const contentText = expandTcoUrls(rawText, legacy);
+  const userLegacy = findUserLegacy(tweet.core ?? tweet);
+  const userId = findUserId(tweet.core ?? tweet);
   const screenName = stringValue(userLegacy?.screen_name);
   const authorHandle = screenName ?? (userId ? `user_${userId}` : 'unknown');
   const authorName = stringValue(userLegacy?.name) ?? screenName ?? (userId ? `User ${userId}` : 'Unknown user');

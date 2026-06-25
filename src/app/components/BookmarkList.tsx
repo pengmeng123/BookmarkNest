@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import type { SearchMatch } from '../../lib/search/searchBookmarks';
-import { Button } from '../../components/Button';
 import { BookmarkCard } from './BookmarkCard';
+import { useIntersectionObserver } from '../hooks/useIntersectionObserver';
 
 interface BookmarkListProps {
   matches: SearchMatch[];
@@ -10,6 +10,7 @@ interface BookmarkListProps {
   loading: boolean;
   error: string | null;
   hasSearchQuery: boolean;
+  focusedIndex?: number | null;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
@@ -27,6 +28,7 @@ export function BookmarkList({
   loading,
   error,
   hasSearchQuery,
+  focusedIndex,
   onArchive,
   onDelete,
   onMove,
@@ -37,10 +39,19 @@ export function BookmarkList({
 }: BookmarkListProps) {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const visibleMatches = useMemo(() => matches.slice(0, visibleLimit), [matches, visibleLimit]);
+  const sentinelRef = useIntersectionObserver(
+    () => setVisibleLimit((current) => current + PAGE_SIZE)
+  );
 
   useEffect(() => {
     setVisibleLimit(PAGE_SIZE);
   }, [matches]);
+
+  useEffect(() => {
+    if (focusedIndex != null && focusedIndex >= visibleLimit) {
+      setVisibleLimit((current) => Math.max(current, focusedIndex + PAGE_SIZE));
+    }
+  }, [focusedIndex, visibleLimit]);
 
   if (loading) {
     return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">Loading bookmarks...</div>;
@@ -68,11 +79,12 @@ export function BookmarkList({
 
   return (
     <div className="divide-y divide-border">
-      {visibleMatches.map(({ bookmark, matchedTerms }) => (
+      {visibleMatches.map(({ bookmark, matchedTerms }, index) => (
         <BookmarkCard
           key={bookmark.id}
           bookmark={bookmark}
           matchedTerms={matchedTerms}
+          focused={focusedIndex === index}
           onArchive={onArchive}
           onDelete={onDelete}
           onMove={onMove}
@@ -83,10 +95,8 @@ export function BookmarkList({
         />
       ))}
       {visibleMatches.length < matches.length ? (
-        <div className="flex items-center justify-center bg-background/60 p-4">
-          <Button onClick={() => setVisibleLimit((current) => current + PAGE_SIZE)}>
-            Show more ({matches.length - visibleMatches.length} remaining)
-          </Button>
+        <div ref={sentinelRef} className="flex items-center justify-center p-4 text-sm text-muted-foreground">
+          Loading more...
         </div>
       ) : null}
     </div>

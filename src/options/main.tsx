@@ -4,7 +4,9 @@ import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
+import { Field, SelectInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
+import { useTheme } from '../hooks/useTheme';
 import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
 import { downloadText } from '../lib/export/download';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
@@ -14,6 +16,7 @@ import '../styles/globals.css';
 type Status = { type: 'success' | 'error'; message: string } | null;
 
 function Options() {
+  const { theme, setTheme } = useTheme();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>(null);
   const [busyAction, setBusyAction] = useState<'export' | 'import' | 'clear' | 'diagnostics' | null>(null);
@@ -118,7 +121,13 @@ function Options() {
       <section className="grid gap-4 md:grid-cols-2">
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Appearance</h2>
-          <p className="mt-2 text-sm text-muted-foreground">Theme: system</p>
+          <Field label="Theme">
+            <SelectInput value={theme} onChange={(e) => void setTheme(e.target.value as 'light' | 'dark' | 'system')}>
+              <option value="system">System</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </SelectInput>
+          </Field>
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>

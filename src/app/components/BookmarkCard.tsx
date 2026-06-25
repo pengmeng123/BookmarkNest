@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Archive, Check, ExternalLink, FolderInput, Link, Tag, Trash2 } from 'lucide-react';
 
 import { Button } from '../../components/Button';
+import { cn } from '../../lib/utils/cn';
 import type { BookmarkListItem } from '../../lib/db/bookmarkRepository';
 
 interface BookmarkCardProps {
   bookmark: BookmarkListItem;
   matchedTerms?: string[];
+  focused?: boolean;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
@@ -18,6 +20,17 @@ interface BookmarkCardProps {
 
 function formatDate(timestamp: number) {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(timestamp);
+}
+
+function thumbnailUrl(url: string): string {
+  if (!url.includes('pbs.twimg.com')) return url;
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set('name', 'small');
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
@@ -51,6 +64,7 @@ function HighlightedText({ text, terms }: { text: string; terms: string[] }) {
 export function BookmarkCard({
   bookmark,
   matchedTerms = [],
+  focused,
   onArchive,
   onDelete,
   onMove,
@@ -61,6 +75,13 @@ export function BookmarkCard({
 }: BookmarkCardProps) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const postDate = bookmark.createdAt ? formatDate(bookmark.createdAt) : bookmark.createdAtText;
+  const cardRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (focused) {
+      cardRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [focused]);
 
   async function handleCopy() {
     if (!bookmark.tweetUrl) {
@@ -79,7 +100,7 @@ export function BookmarkCard({
   }
 
   return (
-    <article className="bg-surface p-4 transition hover:bg-background/60">
+    <article ref={cardRef} className={cn('bg-surface p-4 transition hover:bg-background/60', focused && 'ring-2 ring-primary/40')}>
       <div className="flex gap-3">
         <input
           type="checkbox"
@@ -117,6 +138,35 @@ export function BookmarkCard({
           <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-foreground">
             <HighlightedText text={bookmark.contentText} terms={matchedTerms} />
           </p>
+          {bookmark.mediaUrls.length > 0 ? (
+            <div className={cn('mt-3 grid gap-1 overflow-hidden rounded-lg', bookmark.mediaUrls.length >= 2 ? 'grid-cols-2' : '')}>
+              {bookmark.mediaUrls.slice(0, 4).map((url, index) => (
+                <a
+                  key={url}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={cn(
+                    'relative block overflow-hidden bg-muted',
+                    bookmark.mediaUrls.length === 1 ? 'max-h-48' : 'aspect-video',
+                    bookmark.mediaUrls.length === 3 && index === 0 ? 'col-span-2' : ''
+                  )}
+                >
+                  <img
+                    src={thumbnailUrl(url)}
+                    alt=""
+                    loading="lazy"
+                    className="h-full w-full object-cover transition hover:opacity-90"
+                  />
+                  {index === 3 && bookmark.mediaUrls.length > 4 ? (
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/40 text-sm font-medium text-white">
+                      +{bookmark.mediaUrls.length - 4}
+                    </span>
+                  ) : null}
+                </a>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {bookmark.tags.map((tag) => (
               <span

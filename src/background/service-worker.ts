@@ -694,24 +694,38 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
   let nextUrl: string;
   let lastResponseBody: unknown = null;
   let page = 0;
+  let fetchError: string | null = null;
 
   while (page < 120) {
     page += 1;
     nextUrl = buildBookmarksGraphqlUrl(requestTemplate, cursor ?? undefined);
-    const response = await fetch(nextUrl, {
-      method: 'GET',
-      headers: await buildXHeaders(requestTemplate.headers),
-      credentials: 'include'
-    });
-
-    if (!response.ok) {
-      return { ok: false, error: `X Bookmarks API request failed with ${response.status}. Refresh x.com/i/bookmarks and try again.` };
+    let response: Response;
+    try {
+      response = await fetch(nextUrl, {
+        method: 'GET',
+        headers: await buildXHeaders(requestTemplate.headers),
+        credentials: 'include'
+      });
+    } catch {
+      fetchError = 'Network error while fetching X bookmarks.';
+      break;
     }
 
-    const body = await response.json();
+    if (!response.ok) {
+      fetchError = `X Bookmarks API request failed with ${response.status}.`;
+      await saveImportDebugSnapshot({ reason: 'api_error', page, status: response.status });
+      break;
+    }
+
+    const body = await response.json().catch(() => null);
+    if (!body) {
+      fetchError = 'X Bookmarks API returned an invalid response.';
+      break;
+    }
     lastResponseBody = body;
     const graphqlError = getGraphqlErrorMessage(body);
     if (graphqlError) {
+      fetchError = `X Bookmarks GraphQL error: ${graphqlError}`;
       await saveImportDebugSnapshot({
         reason: 'graphql_error',
         page,
@@ -719,7 +733,7 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
         error: graphqlError,
         body
       });
-      return { ok: false, error: `X Bookmarks GraphQL error: ${graphqlError}` };
+      break;
     }
 
     const pageBookmarks = parseGraphqlBookmarks(body);
@@ -742,21 +756,23 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
   }
 
   if (bookmarks.length === 0) {
+    const baseError = fetchError ?? 'The X Bookmarks API returned no bookmark items.';
     await saveImportDebugSnapshot({
-      reason: 'no_bookmark_items',
+      reason: fetchError ? 'fetch_error_no_data' : 'no_bookmark_items',
       queryId: requestTemplate.queryId ?? parseBookmarksQueryId(requestTemplate.url),
       features: requestTemplate.features ?? null,
       variables: requestTemplate.variables ?? null,
-      body: lastResponseBody
+      body: lastResponseBody,
+      error: fetchError
     });
-    return { ok: false, error: 'The X Bookmarks API returned no bookmark items. Debug data was saved in extension storage as bookmarknest:last-x-import-debug.' };
+    return { ok: false, error: `${baseError} Refresh x.com/i/bookmarks and try again.` };
   }
 
   const domEnriched = await mergeLoadedXMetadata(bookmarks);
   const enrichedBookmarks = await enrichBookmarkAuthors(domEnriched.bookmarks, requestTemplate);
   const diagnostics = {
-    reason: 'import_completed',
-    status: 'completed',
+    reason: fetchError ? 'import_partial' : 'import_completed',
+    status: fetchError ? 'partial' : 'completed',
     source: 'x_graphql_bookmarks',
     queryId: requestTemplate.queryId ?? parseBookmarksQueryId(requestTemplate.url) ?? null,
     apiFoundCount: bookmarks.length,
@@ -767,7 +783,8 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
     missingTweetIdSample: bookmarks
       .filter((bookmark) => bookmark.tweetId && !enrichedBookmarks.find((enriched) => enriched.tweetId === bookmark.tweetId && enriched.authorAvatarUrl))
       .map((bookmark) => bookmark.tweetId as string)
-      .slice(0, 25)
+      .slice(0, 25),
+    fetchError: fetchError ?? undefined
   };
 
   const response = await saveImportedBookmarks({

@@ -6,7 +6,7 @@ export interface SearchMatch {
 }
 
 function normalize(value: string) {
-  return value.toLowerCase().replace(/^@/, '').trim();
+  return value.normalize('NFC').toLowerCase().replace(/^@/, '').trim();
 }
 
 function buildSearchText(bookmark: BookmarkListItem) {
@@ -19,6 +19,7 @@ function buildSearchText(bookmark: BookmarkListItem) {
     ...bookmark.tags.map((tag) => tag.name)
   ]
     .join(' ')
+    .normalize('NFC')
     .toLowerCase();
 }
 

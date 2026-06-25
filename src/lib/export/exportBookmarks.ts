@@ -31,6 +31,7 @@ export function createJsonBackup(bookmarks: BookmarkListItem[], now = new Date()
       authorName: bookmark.authorName,
       authorHandle: bookmark.authorHandle,
       contentText: bookmark.contentText,
+      mediaUrls: bookmark.mediaUrls ?? [],
       tags: bookmark.tags.map((tag) => tag.name),
       folder: bookmark.folder?.name ?? null,
       importedAt: bookmark.importedAt
@@ -60,6 +61,7 @@ export function createMarkdownExport(bookmarks: BookmarkListItem[]) {
             '',
             bookmark.contentText,
             '',
+            ...(bookmark.mediaUrls?.length ? [`- Media: ${bookmark.mediaUrls.join(' , ')}`] : []),
             `- URL: ${bookmark.tweetUrl ?? ''}`,
             `- Tags: ${tags}`,
             `- Imported: ${formatDate(bookmark.importedAt)}`
@@ -73,7 +75,10 @@ export function createMarkdownExport(bookmarks: BookmarkListItem[]) {
 }
 
 function csvCell(value: string | number | undefined | null) {
-  const text = String(value ?? '');
+  let text = String(value ?? '');
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
   if (/[",\n\r]/.test(text)) {
     return `"${text.replaceAll('"', '""')}"`;
   }
@@ -81,13 +86,14 @@ function csvCell(value: string | number | undefined | null) {
 }
 
 export function createCsvExport(bookmarks: BookmarkListItem[]) {
-  const header = ['tweet_id', 'author_name', 'author_handle', 'content', 'url', 'tags', 'folder', 'imported_at'];
+  const header = ['tweet_id', 'author_name', 'author_handle', 'content', 'url', 'media_urls', 'tags', 'folder', 'imported_at'];
   const rows = bookmarks.filter(eligible).map((bookmark) => [
     bookmark.tweetId,
     bookmark.authorName,
     bookmark.authorHandle,
     bookmark.contentText,
     bookmark.tweetUrl,
+    (bookmark.mediaUrls ?? []).join(' '),
     bookmark.tags.map((tag) => tag.name).join('; '),
     bookmark.folder?.name ?? 'Uncategorized',
     formatDate(bookmark.importedAt)

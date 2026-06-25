@@ -7,22 +7,25 @@ import {
   History,
   Inbox,
   LoaderCircle,
+  Moon,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
+  Sun,
   Tags,
   Trash2,
   Upload,
   X
 } from 'lucide-react';
-import { StrictMode, useEffect, useMemo, useState } from 'react';
+import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { Field, SelectInput, TextInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
+import { useTheme } from '../hooks/useTheme';
 import {
   deleteFolder,
   deleteTag,
@@ -49,6 +52,7 @@ import '../styles/globals.css';
 import { BookmarkList } from './components/BookmarkList';
 import { MoveDialog } from './components/MoveDialog';
 import { useDebouncedValue } from './hooks/useDebouncedValue';
+import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLibraryData } from './hooks/useLibraryData';
 import { useLicenseState } from './hooks/useLicenseState';
 
@@ -399,6 +403,7 @@ function TagDialog({
 }
 
 function App() {
+  const { theme, setTheme } = useTheme();
   const [folderId, setFolderId] = useState<FolderFilter>(undefined);
   const [tagId, setTagId] = useState<string | null | undefined>(undefined);
   const [includeArchived, setIncludeArchived] = useState(false);
@@ -421,6 +426,21 @@ function App() {
     () => searchBookmarks(library.bookmarks, debouncedSearchQuery),
     [library.bookmarks, debouncedSearchQuery]
   );
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const { focusedIndex } = useKeyboardNavigation({
+    itemCount: searchMatches.length,
+    searchInputRef,
+    onOpen: (index) => {
+      const url = searchMatches[index]?.bookmark.tweetUrl;
+      if (url) window.open(url, '_blank', 'noopener,noreferrer');
+    },
+    onToggleSelect: (index) => {
+      const bookmark = searchMatches[index]?.bookmark;
+      if (bookmark && !bookmark.locked) {
+        handleSelectedChange(bookmark.id, !selectedIds.has(bookmark.id));
+      }
+    }
+  });
 
   async function refreshAfter(action: Promise<unknown>) {
     await action;
@@ -895,7 +915,22 @@ function App() {
   const selectableCount = searchMatches.filter((match) => !match.bookmark.locked).length;
 
   return (
-    <PageShell title="BookmarkNest" description="Import the X bookmarks already loaded in your browser, then organize and export them locally.">
+    <PageShell
+      title="BookmarkNest"
+      description="Import the X bookmarks already loaded in your browser, then organize and export them locally."
+      actions={
+        <button
+          className="grid h-9 w-9 place-items-center rounded-app border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          aria-label="Toggle theme"
+          onClick={() => {
+            const next = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
+            void setTheme(next);
+          }}
+        >
+          {theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
+        </button>
+      }
+    >
       <section className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
         <AppSidebar
           folders={library.folders}
@@ -921,6 +956,7 @@ function App() {
               <label className="flex h-11 min-w-0 flex-1 items-center gap-2 rounded-app border border-border bg-background px-3 text-sm shadow-inner">
                 <Search size={17} className="text-muted-foreground" />
                 <input
+                  ref={searchInputRef}
                   className="w-full bg-transparent outline-none placeholder:text-muted-foreground"
                   placeholder="Search text, authors, tags"
                   aria-label="Search bookmarks"
@@ -1010,6 +1046,7 @@ function App() {
             loading={library.loading}
             error={library.error}
             hasSearchQuery={Boolean(debouncedSearchQuery.trim())}
+            focusedIndex={focusedIndex}
             onArchive={(bookmarkId, archived) => void handleArchive(bookmarkId, archived)}
             onDelete={(bookmarkId) => void handleDelete(bookmarkId)}
             onMove={handleMove}

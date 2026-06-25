@@ -4,6 +4,7 @@ const EVENT_NAME = 'bookmarknest:x-graphql-response';
 const REQUEST_EVENT_NAME = 'bookmarknest:x-bookmarks-request';
 const FETCH_ALL_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks';
 const FETCH_ALL_PROGRESS_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks-progress';
+const FETCH_ALL_CANCEL_EVENT_NAME = 'bookmarknest:x-fetch-all-bookmarks-cancel';
 
 interface BookmarkRequestTemplate {
   url: string;
@@ -157,6 +158,10 @@ XMLHttpRequest.prototype.send = function send(body?: Document | XMLHttpRequestBo
   return originalSend.call(this, body);
 };
 
+function sleep(ms: number) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
 window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
   const detail = (event as CustomEvent<{ requestId?: string; maxPages?: number }>).detail;
   const requestId = detail?.requestId;
@@ -173,26 +178,63 @@ window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
     const maxPages = Math.max(1, Math.min(detail.maxPages ?? 80, 200));
     const seenCursors = new Set<string>();
     let cursor = lastBottomCursor;
+    let completedPages = 0;
+    let cancelled = false;
 
-    for (let page = 1; page <= maxPages && cursor; page += 1) {
-      if (seenCursors.has(cursor)) {
-        break;
+    const cancelHandler = (e: Event) => {
+      if ((e as CustomEvent<{ requestId?: string }>).detail?.requestId === requestId) {
+        cancelled = true;
       }
-      seenCursors.add(cursor);
-      emitFetchAllProgress(requestId, { phase: 'fetching', page, cursor });
+    };
+    window.addEventListener(FETCH_ALL_CANCEL_EVENT_NAME, cancelHandler);
 
-      const nextUrl = updateGraphqlCursorUrl(lastBookmarkRequest.url, cursor);
-      const response = await originalFetch(nextUrl, cloneRequestInit(lastBookmarkRequest.init));
-      const body = await response.clone().json().catch(() => null);
-      if (!response.ok || !body) {
-        emitFetchAllProgress(requestId, { phase: 'error', error: `Bookmarks API request failed with ${response.status}.` });
-        return;
+    try {
+      for (let page = 1; page <= maxPages && cursor; page += 1) {
+        if (cancelled || seenCursors.has(cursor)) {
+          break;
+        }
+        seenCursors.add(cursor);
+        emitFetchAllProgress(requestId, { phase: 'fetching', page, cursor });
+
+        try {
+          const nextUrl = updateGraphqlCursorUrl(lastBookmarkRequest.url, cursor);
+          const response = await originalFetch(nextUrl, cloneRequestInit(lastBookmarkRequest.init));
+          const body = await response.clone().json().catch(() => null);
+          if (!response.ok || !body) {
+            if (completedPages > 0) {
+              emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages, error: `API returned ${response.status} on page ${page}` });
+            } else {
+              emitFetchAllProgress(requestId, { phase: 'error', error: `Bookmarks API request failed with ${response.status}.` });
+            }
+            return;
+          }
+
+          emitGraphqlResponse(nextUrl, body);
+          completedPages += 1;
+          cursor = findBottomCursor(body);
+
+          if (cursor && page < maxPages && !cancelled) {
+            await sleep(1000 + Math.floor(Math.random() * 800));
+          }
+        } catch {
+          if (completedPages > 0) {
+            emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages, error: 'Network error during fetch' });
+          } else {
+            emitFetchAllProgress(requestId, { phase: 'error', error: 'Network error while fetching bookmarks.' });
+          }
+          return;
+        }
       }
 
-      emitGraphqlResponse(nextUrl, body);
-      cursor = findBottomCursor(body);
+      if (cancelled && completedPages > 0) {
+        emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages });
+      } else if (cancelled) {
+        emitFetchAllProgress(requestId, { phase: 'error', error: 'Import cancelled.' });
+      } else {
+        emitFetchAllProgress(requestId, { phase: 'done', pages: seenCursors.size });
+      }
+    } finally {
+      window.removeEventListener(FETCH_ALL_CANCEL_EVENT_NAME, cancelHandler);
     }
-
-    emitFetchAllProgress(requestId, { phase: 'done', pages: seenCursors.size });
   })();
 });

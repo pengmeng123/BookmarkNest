@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
+import { useTheme } from '../hooks/useTheme';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import type { ImportSession } from '../shared/types';
 import '../styles/globals.css';
@@ -21,6 +22,7 @@ function formatImportError(error?: string) {
 }
 
 function Popup() {
+  useTheme();
   const [status, setStatus] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
 

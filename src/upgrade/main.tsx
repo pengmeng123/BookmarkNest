@@ -4,6 +4,7 @@ import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
+import { useTheme } from '../hooks/useTheme';
 import { activateAndStoreLicense, deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
 import { emptyLicenseData } from '../lib/storage/localStorage';
 import type { LicenseData } from '../shared/types';
@@ -66,6 +67,7 @@ function openCheckout(url: string | undefined, setStatus: (status: string) => vo
 }
 
 function Upgrade() {
+  useTheme();
   const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
   const [licenseKey, setLicenseKey] = useState('');
   const [status, setStatus] = useState<string | null>(null);
