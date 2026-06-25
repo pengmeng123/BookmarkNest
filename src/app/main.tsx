@@ -744,7 +744,7 @@ function App() {
     await downloadBookmarks(format, bookmarks);
   }
 
-  async function handleImport(mode: 'visible' | 'auto-scroll' = 'visible') {
+  async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
     if (importMode) {
       return;
     }
@@ -752,7 +752,7 @@ function App() {
     setImportMode(mode);
     setImportStatus({
       type: 'loading',
-      message: mode === 'auto-scroll' ? 'Loading more X bookmarks, then importing...' : 'Looking for an open X bookmarks tab...'
+      message: mode === 'auto-scroll' ? 'Importing X bookmarks and scanning the X page for avatars...' : 'Looking for an open X bookmarks tab...'
     });
     try {
       const response = await sendRuntimeMessage<{ session?: ImportSession }>({
@@ -934,11 +934,7 @@ function App() {
                 ) : null}
               </label>
               <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="primary" onClick={() => void handleImport('visible')} disabled={Boolean(importMode)}>
-                    {importMode === 'visible' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
-                    {importMode === 'visible' ? 'Importing...' : 'Import visible'}
-                  </Button>
-                  <Button onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
+                  <Button variant="primary" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
                     {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                     {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                   </Button>

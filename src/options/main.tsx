@@ -1,5 +1,5 @@
 import { AlertTriangle, Download, LoaderCircle, Trash2, Upload } from 'lucide-react';
-import { StrictMode, useRef, useState } from 'react';
+import { StrictMode, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
@@ -8,6 +8,7 @@ import { PageShell } from '../components/PageShell';
 import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
 import { downloadText } from '../lib/export/download';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
+import type { ImportDiagnostics } from '../shared/types';
 import '../styles/globals.css';
 
 type Status = { type: 'success' | 'error'; message: string } | null;
@@ -15,8 +16,16 @@ type Status = { type: 'success' | 'error'; message: string } | null;
 function Options() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>(null);
-  const [busyAction, setBusyAction] = useState<'export' | 'import' | 'clear' | null>(null);
+  const [busyAction, setBusyAction] = useState<'export' | 'import' | 'clear' | 'diagnostics' | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [versionClicks, setVersionClicks] = useState(0);
+  const showDiagnostics = versionClicks >= 5;
+  const extensionVersion = useMemo(() => {
+    if (typeof chrome === 'undefined') {
+      return '0.1.0';
+    }
+    return chrome.runtime?.getManifest?.().version ?? '0.1.0';
+  }, []);
 
   async function handleExportBackup() {
     if (busyAction) {
@@ -76,6 +85,34 @@ function Options() {
     }
   }
 
+  async function handleExportDiagnostics() {
+    if (busyAction) {
+      return;
+    }
+
+    setBusyAction('diagnostics');
+    setStatus(null);
+    try {
+      const response = await sendRuntimeMessage<{ diagnostics: ImportDiagnostics }>({ type: 'GET_IMPORT_DIAGNOSTICS' });
+      if (!response.ok || !response.data?.diagnostics) {
+        setStatus({ type: 'error', message: response.error ?? 'No import diagnostics are available yet.' });
+        return;
+      }
+
+      const date = new Date().toISOString().slice(0, 10);
+      await downloadText(
+        `bookmarknest-import-diagnostics-${date}.json`,
+        JSON.stringify(response.data.diagnostics, null, 2),
+        'application/json;charset=utf-8'
+      );
+      setStatus({ type: 'success', message: 'Import diagnostics exported.' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error instanceof Error ? error.message : 'Unable to export diagnostics.' });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   return (
     <PageShell title="Options" description="Manage preferences, local data, license, and privacy controls.">
       <section className="grid gap-4 md:grid-cols-2">
@@ -124,7 +161,26 @@ function Options() {
             Bookmark content stays in local browser storage unless you export it.
           </p>
         </div>
+        {showDiagnostics ? (
+          <div className="rounded-app border border-border bg-surface p-4">
+            <h2 className="text-sm font-semibold">Import diagnostics</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Export the latest import counters and error details. Bookmark text is not included.
+            </p>
+            <Button className="mt-3" size="sm" onClick={() => void handleExportDiagnostics()} disabled={Boolean(busyAction)}>
+              {busyAction === 'diagnostics' ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
+              Export diagnostics
+            </Button>
+          </div>
+        ) : null}
       </section>
+      <button
+        className="mt-6 text-xs text-muted-foreground"
+        aria-label="Extension version"
+        onClick={() => setVersionClicks((current) => current + 1)}
+      >
+        Version {extensionVersion}
+      </button>
       <Dialog
         open={confirmClearOpen}
         title="Clear local data?"

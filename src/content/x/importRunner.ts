@@ -1,5 +1,6 @@
 import type { ImportSession } from '../../shared/types';
 import type { MessageResponse } from '../../shared/types';
+import type { BookmarkInput } from '../../shared/types';
 import { parseLoadedBookmarkCards, type ParsedBookmarkCard } from './parser';
 
 export interface ImportRunResult {
@@ -16,6 +17,7 @@ export interface AutoScrollOptions {
   minScrolls?: number;
   waitMs?: number;
   scrollBy?: number;
+  apiBookmarks?: () => BookmarkInput[];
 }
 
 export interface AutoScrollProgress {
@@ -40,15 +42,17 @@ export async function runImportFromLoadedCards(
   sourceUrl: string,
   root: ParentNode = document,
   controller?: ImportController,
-  onProgress?: (session: ImportSession) => void
+  onProgress?: (session: ImportSession) => void,
+  options: Pick<AutoScrollOptions, 'apiBookmarks'> = {}
 ): Promise<ImportRunResult> {
   const parsed = parseLoadedBookmarkCards(root);
+  const apiBookmarks = options.apiBookmarks?.() ?? [];
   const now = Date.now();
   const session: ImportSession = {
     id: createId('import'),
     startedAt: now,
     sourceUrl,
-    foundCount: parsed.foundCount,
+    foundCount: apiBookmarks.length || parsed.foundCount,
     insertedCount: 0,
     updatedCount: 0,
     duplicateCount: 0,
@@ -70,13 +74,14 @@ export async function runImportFromLoadedCards(
   }
 
   if (session.status !== 'cancelled') {
+    const bookmarkInputs = apiBookmarks.length ? apiBookmarks : bookmarks;
     const response = await chrome.runtime.sendMessage({
       type: 'SAVE_IMPORTED_BOOKMARKS',
       payload: {
         sourceUrl,
-        bookmarks,
-        foundCount: parsed.foundCount,
-        failedCount: parsed.failedCount
+        bookmarks: bookmarkInputs,
+        foundCount: apiBookmarks.length || parsed.foundCount,
+        failedCount: apiBookmarks.length ? 0 : parsed.failedCount
       }
     });
     const saveResponse = response as MessageResponse<ImportRunResult>;
@@ -125,12 +130,16 @@ function collectParsedBookmarks(root: ParentNode, collected: Map<string, ParsedB
 }
 
 async function saveCollectedBookmarks(sourceUrl: string, collected: Map<string, ParsedBookmarkCard>, failedCount: number) {
+  return saveBookmarkInputs(sourceUrl, Array.from(collected.values()).map((card) => card.input), collected.size + failedCount, failedCount);
+}
+
+async function saveBookmarkInputs(sourceUrl: string, bookmarks: BookmarkInput[], foundCount: number, failedCount: number) {
   const response = await chrome.runtime.sendMessage({
     type: 'SAVE_IMPORTED_BOOKMARKS',
     payload: {
       sourceUrl,
-      bookmarks: Array.from(collected.values()).map((card) => card.input),
-      foundCount: collected.size + failedCount,
+      bookmarks,
+      foundCount,
       failedCount
     }
   });
@@ -271,6 +280,11 @@ export async function runImportWithAutoScroll(
       onProgress?.({ phase: 'settled', scrolls, foundCount: parsed.foundCount, uniqueCount: collected.size, idleRounds, maxScrolls, reachedEnd: nearBottom });
       break;
     }
+  }
+
+  const apiBookmarks = options.apiBookmarks?.() ?? [];
+  if (apiBookmarks.length > 0) {
+    return saveBookmarkInputs(sourceUrl, apiBookmarks, apiBookmarks.length, 0);
   }
 
   return saveCollectedBookmarks(sourceUrl, collected, failedCount);

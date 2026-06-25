@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { resetDomainData, softDeleteBookmark, upsertBookmark } from '../lib/db/bookmarkRepository';
 import { db } from '../lib/db/database';
-import { saveImportedBookmarks } from './service-worker';
+import { getImportDiagnostics, saveImportedBookmarks } from './service-worker';
 
 const bookmark = {
   tweetId: '1',
@@ -16,6 +16,7 @@ const bookmark = {
 describe('saveImportedBookmarks', () => {
   afterEach(async () => {
     await resetDomainData();
+    vi.unstubAllGlobals();
   });
 
   it('saves imported bookmarks in the extension database', async () => {
@@ -102,5 +103,46 @@ describe('saveImportedBookmarks', () => {
     expect(stored?.deleted).toBe(false);
     expect(stored?.deletedAt).toBeUndefined();
     expect(response.data?.session.insertedCount).toBe(1);
+  });
+
+  it('exports sanitized import diagnostics without raw response bodies', async () => {
+    const storage: Record<string, unknown> = {
+      'bookmarknest:last-x-import-debug': {
+        createdAt: 1710000000000,
+        reason: 'graphql_error',
+        queryId: 'BookmarksQuery',
+        apiFoundCount: 27,
+        domMatchedCount: 26,
+        missingTweetIdSample: ['1', '2'],
+        error: 'Rate limited',
+        body: { data: { bookmark_timeline: { sensitive: 'raw response' } } }
+      }
+    };
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        getManifest: () => ({ version: '0.1.0' })
+      },
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: storage[key] }))
+        }
+      }
+    });
+
+    const response = await getImportDiagnostics();
+
+    expect(response.ok).toBe(true);
+    expect(response.data?.diagnostics).toMatchObject({
+      extensionVersion: '0.1.0',
+      createdAt: '2024-03-09T16:00:00.000Z',
+      reason: 'graphql_error',
+      queryId: 'BookmarksQuery',
+      apiFoundCount: 27,
+      domMatchedCount: 26,
+      missingTweetIdSample: ['1', '2'],
+      error: 'Rate limited'
+    });
+    expect(JSON.stringify(response.data?.diagnostics)).not.toContain('raw response');
   });
 });

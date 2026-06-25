@@ -63,6 +63,28 @@ describe('bookmarkRepository', () => {
     expect(updated.bookmark.folderId).toBe(folder.id);
   });
 
+  it('does not overwrite enriched author fields with placeholder duplicate imports', async () => {
+    await upsertBookmark({
+      ...bookmarkInput(1),
+      authorId: '123',
+      authorName: 'Real Author',
+      authorHandle: 'real_author',
+      authorAvatarUrl: 'https://pbs.twimg.com/profile_images/real.jpg'
+    });
+
+    const updated = await upsertBookmark({
+      ...bookmarkInput(1),
+      authorId: '123',
+      authorName: 'User 123',
+      authorHandle: 'user_123',
+      authorAvatarUrl: undefined
+    });
+
+    expect(updated.bookmark.authorName).toBe('Real Author');
+    expect(updated.bookmark.authorHandle).toBe('real_author');
+    expect(updated.bookmark.authorAvatarUrl).toBe('https://pbs.twimg.com/profile_images/real.jpg');
+  });
+
   it('soft deletes bookmarks without removing records', async () => {
     const inserted = await upsertBookmark(bookmarkInput(1));
     await softDeleteBookmark(inserted.bookmark.id);

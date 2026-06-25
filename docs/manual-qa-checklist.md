@@ -11,10 +11,19 @@
 ## Import
 
 - X/Twitter non-bookmark pages do not show the injected import button.
-- `https://x.com/i/bookmarks` shows the injected import button.
-- Import currently loaded cards.
-- Import can be cancelled.
-- Import duplicate cards without creating duplicate records.
+- `https://x.com/i/bookmarks` can be opened or focused by the import flow.
+- App page `Import more` imports through X Bookmarks GraphQL pagination.
+- Popup `Import more` imports through the same flow as the app page.
+- Import works when an X bookmarks tab is already open.
+- Import works when no X bookmarks tab is open and the extension opens a temporary one.
+- Import restores the previous active tab after metadata scanning.
+- Imported order matches the visible X bookmarks order for the tested account.
+- Imported count matches the X account's expected bookmark count where practical.
+- Author names, handles, and avatars are present for rendered X bookmarks.
+- Import duplicate bookmarks without creating duplicate records.
+- Deleted local bookmarks are restored when imported again.
+- Import diagnostics can be revealed from Options by clicking the version label five times.
+- Diagnostics export contains counts and errors but does not contain bookmark text.
 - Parser failure shows a clear error or failed count.
 - Test import scale with approximately 50, 200, and 500 loaded cards where practical.
 

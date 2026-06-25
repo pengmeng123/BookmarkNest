@@ -24,13 +24,13 @@ function Popup() {
   const [status, setStatus] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
 
-  async function handleImport(mode: 'visible' | 'auto-scroll' = 'visible') {
+  async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
     if (importMode) {
       return;
     }
 
     setImportMode(mode);
-    setStatus(mode === 'auto-scroll' ? 'Opening the X bookmarks tab, scrolling loaded items, then importing...' : 'Looking for an open X bookmarks tab...');
+    setStatus(mode === 'auto-scroll' ? 'Importing X bookmarks and scanning the X page for avatars...' : 'Looking for an open X bookmarks tab...');
     try {
       const response = await sendRuntimeMessage<{ session?: ImportSession }>({
         type: 'START_X_IMPORT',
@@ -65,10 +65,6 @@ function Popup() {
         <Button variant="primary" onClick={() => void sendRuntimeMessage({ type: 'OPEN_APP' })}>
           <ExternalLink size={16} />
           Open BookmarkNest
-        </Button>
-        <Button onClick={() => void handleImport('visible')} disabled={Boolean(importMode)}>
-          {importMode === 'visible' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
-          {importMode === 'visible' ? 'Importing...' : 'Import visible'}
         </Button>
         <Button onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
           {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}

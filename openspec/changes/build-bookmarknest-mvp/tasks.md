@@ -57,7 +57,7 @@
 ## 8. Pro and License
 
 - [x] 8.1 Implement free/Pro capability checks and locked-record messaging without deleting local records.
-- [x] 8.2 Implement upgrade page Free vs Pro comparison, one-time purchase copy, checkout button, license form, active status, deactivation, and support contact.
+- [x] 8.2 Implement upgrade page Free vs Monthly Pro vs Lifetime Pro comparison, checkout buttons, license form, active status, deactivation, and support contact.
 - [x] 8.3 Implement license Worker client for activate, validate, and deactivate endpoints with configurable base URL.
 - [x] 8.4 Implement 7-day background validation, offline grace, invalid license fallback, and specific activation error states.
 - [x] 8.5 Add tests for Pro activation visibility restore, Pro loss fallback, offline validation, and device-limit/invalid errors.

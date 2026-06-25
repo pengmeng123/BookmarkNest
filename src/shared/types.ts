@@ -4,6 +4,7 @@ export interface Bookmark {
   id: string;
   tweetId?: string;
   tweetUrl?: string;
+  authorId?: string;
   authorName: string;
   authorHandle: string;
   authorAvatarUrl?: string;
@@ -88,6 +89,9 @@ export type ExtensionMessage =
   | { type: 'OPEN_APP' }
   | { type: 'OPEN_UPGRADE' }
   | { type: 'START_X_IMPORT'; mode?: 'visible' | 'auto-scroll' }
+  | { type: 'GET_IMPORT_DIAGNOSTICS' }
+  | { type: 'CAPTURE_X_BOOKMARKS_REQUEST'; payload: CapturedBookmarksRequest }
+  | { type: 'GET_LOADED_X_BOOKMARKS'; tweetIds?: string[]; autoScroll?: boolean }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }
   | { type: 'GET_ACTIVE_TAB_IMPORT_STATE' };
 
@@ -100,6 +104,7 @@ export interface MessageResponse<T = unknown> {
 export interface BookmarkInput {
   tweetId?: string;
   tweetUrl?: string;
+  authorId?: string;
   authorName: string;
   authorHandle: string;
   authorAvatarUrl?: string;
@@ -109,4 +114,32 @@ export interface BookmarkInput {
   createdAt?: number;
   sourceOrder?: number;
   source: BookmarkSource;
+}
+
+export interface CapturedBookmarksRequest {
+  url: string;
+  operationName?: 'Bookmarks';
+  queryId?: string;
+  features?: string;
+  variables?: string;
+  headers: Record<string, string>;
+}
+
+export interface ImportDiagnostics {
+  exportedAt: string;
+  extensionVersion: string;
+  createdAt?: string;
+  reason?: string;
+  status?: ImportSessionStatus | 'failed';
+  source?: string;
+  page?: number;
+  queryId?: string | null;
+  apiFoundCount?: number;
+  domMatchedCount?: number;
+  avatarMatchedCount?: number;
+  missingAvatarCount?: number;
+  missingAuthorCount?: number;
+  missingTweetIdSample?: string[];
+  session?: Pick<ImportSession, 'foundCount' | 'insertedCount' | 'updatedCount' | 'duplicateCount' | 'failedCount' | 'status'>;
+  error?: string;
 }

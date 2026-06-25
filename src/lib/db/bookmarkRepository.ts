@@ -41,6 +41,14 @@ export function createDedupeKey(input: Pick<BookmarkInput, 'tweetId' | 'tweetUrl
   return `hash:${input.authorHandle.trim().toLowerCase()}::${input.contentText.trim().toLowerCase()}`;
 }
 
+function isPlaceholderAuthorName(value: string) {
+  return value === 'Unknown user' || value === 'Unavailable tweet' || /^User \d+$/.test(value);
+}
+
+function isPlaceholderAuthorHandle(value: string) {
+  return value === 'unknown' || value.startsWith('user_');
+}
+
 async function recalculateTagUsage(tagIds: string[]) {
   const uniqueTagIds = Array.from(new Set(tagIds));
   await Promise.all(
@@ -62,9 +70,10 @@ export async function upsertBookmark(input: BookmarkInput) {
       ...existing,
       tweetId: input.tweetId ?? existing.tweetId,
       tweetUrl: input.tweetUrl ?? existing.tweetUrl,
-      authorName: input.authorName,
-      authorHandle: input.authorHandle,
-      authorAvatarUrl: input.authorAvatarUrl,
+      authorId: input.authorId ?? existing.authorId,
+      authorName: isPlaceholderAuthorName(input.authorName) ? existing.authorName : input.authorName,
+      authorHandle: isPlaceholderAuthorHandle(input.authorHandle) ? existing.authorHandle : input.authorHandle,
+      authorAvatarUrl: input.authorAvatarUrl ?? existing.authorAvatarUrl,
       contentText: input.contentText,
       mediaUrls: input.mediaUrls ?? [],
       createdAtText: input.createdAtText,
@@ -87,6 +96,7 @@ export async function upsertBookmark(input: BookmarkInput) {
     id: createId('bookmark'),
     tweetId: input.tweetId,
     tweetUrl: input.tweetUrl,
+    authorId: input.authorId,
     authorName: input.authorName,
     authorHandle: input.authorHandle,
     authorAvatarUrl: input.authorAvatarUrl,

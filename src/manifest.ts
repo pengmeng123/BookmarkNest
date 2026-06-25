@@ -15,9 +15,23 @@ export const manifest: ManifestV3Export = {
     type: 'module'
   },
   options_page: 'src/options/index.html',
-  permissions: ['storage', 'downloads', 'clipboardWrite'],
+  permissions: [
+    'storage',
+    'downloads',
+    'clipboardWrite',
+    'webRequest',
+    'declarativeNetRequest',
+    'declarativeNetRequestWithHostAccess',
+    'cookies'
+  ],
   host_permissions: ['https://x.com/*', 'https://twitter.com/*'],
   content_scripts: [
+    {
+      matches: ['https://x.com/*', 'https://twitter.com/*'],
+      js: ['src/content/x/network-hook.ts'],
+      run_at: 'document_start',
+      world: 'MAIN'
+    },
     {
       matches: ['https://x.com/*', 'https://twitter.com/*'],
       js: ['src/content/x/content-script.ts'],
