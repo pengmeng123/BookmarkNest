@@ -447,6 +447,33 @@ export async function listBookmarkItems(filters: BookmarkListFilters = {}): Prom
     }));
 }
 
+export interface BookmarkCounts {
+  total: number;
+  uncategorized: number;
+  archived: number;
+  byFolder: Record<string, number>;
+}
+
+export async function getBookmarkCounts(): Promise<BookmarkCounts> {
+  const bookmarks = await db.bookmarks.filter((b) => !b.deleted).toArray();
+  const active = bookmarks.filter((b) => !b.archived);
+  const byFolder: Record<string, number> = {};
+  let uncategorized = 0;
+  for (const b of active) {
+    if (b.folderId) {
+      byFolder[b.folderId] = (byFolder[b.folderId] ?? 0) + 1;
+    } else {
+      uncategorized++;
+    }
+  }
+  return {
+    total: active.length,
+    uncategorized,
+    archived: bookmarks.length - active.length,
+    byFolder
+  };
+}
+
 export async function listFolders() {
   return db.folders.orderBy('sortOrder').toArray();
 }

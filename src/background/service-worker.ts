@@ -3,6 +3,7 @@ import { upsertBookmark } from '../lib/db/bookmarkRepository';
 import { db } from '../lib/db/database';
 import { parseGraphqlBookmarks } from '../content/x/graphqlParser';
 import { findBottomCursor } from '../content/x/graphqlCursor';
+import { getSettings } from '../lib/storage/localStorage';
 import type { CapturedBookmarksRequest, ExtensionMessage, ImportDiagnostics, ImportPayload, ImportSession, MessageResponse } from '../shared/types';
 
 let capturedBookmarksRequest: CapturedBookmarksRequest | null = null;
@@ -10,6 +11,17 @@ const X_BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4p
 const CAPTURED_BOOKMARKS_REQUEST_KEY = 'bookmarknest:x-bookmarks-request';
 const LAST_IMPORT_DEBUG_KEY = 'bookmarknest:last-x-import-debug';
 const BOOKMARKS_GRAPHQL_PATTERN = /\/i\/api\/graphql\/([^/]+)\/Bookmarks\b/;
+const SYNC_ALARM_NAME = 'bookmarknest-auto-sync';
+
+async function updateSyncAlarm() {
+  if (!chrome.alarms) return;
+  const settings = await getSettings();
+  if (settings.autoSync && settings.syncIntervalMinutes > 0) {
+    await chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: settings.syncIntervalMinutes });
+  } else {
+    await chrome.alarms.clear(SYNC_ALARM_NAME);
+  }
+}
 const USER_BY_REST_ID_OPERATION = 'UserByRestId';
 const DEFAULT_BOOKMARKS_FEATURES: Record<string, boolean> = {
   graphql_timeline_v2_bookmark_timeline: true,
@@ -871,7 +883,7 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
     }
   }
 
-  session.status = 'completed';
+  session.status = session.failedCount > 0 && session.insertedCount === 0 && session.duplicateCount === 0 ? 'failed' : 'completed';
   session.finishedAt = Date.now();
   await db.importSessions.put(session);
 
@@ -893,36 +905,59 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
   chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
     if (message.type === 'OPEN_APP') {
-      openExtensionPage(EXTENSION_PAGES.app).then(() => sendResponse({ ok: true }));
+      void chrome.action?.setBadgeText?.({ text: '' });
+      openExtensionPage(EXTENSION_PAGES.app).then(() => sendResponse({ ok: true })).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     if (message.type === 'OPEN_UPGRADE') {
-      openExtensionPage(EXTENSION_PAGES.upgrade).then(() => sendResponse({ ok: true }));
+      openExtensionPage(EXTENSION_PAGES.upgrade).then(() => sendResponse({ ok: true })).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     if (message.type === 'START_X_IMPORT') {
-      sendStartImportToActiveTab(message.mode).then(sendResponse);
+      sendStartImportToActiveTab(message.mode).then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     if (message.type === 'GET_IMPORT_DIAGNOSTICS') {
-      getImportDiagnostics().then(sendResponse);
+      getImportDiagnostics().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     if (message.type === 'CAPTURE_X_BOOKMARKS_REQUEST') {
-      captureBookmarksRequest(message.payload).then(() => sendResponse({ ok: true }));
+      captureBookmarksRequest(message.payload).then(() => sendResponse({ ok: true })).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     if (message.type === 'SAVE_IMPORTED_BOOKMARKS') {
-      saveImportedBookmarks(message.payload).then(sendResponse);
+      saveImportedBookmarks(message.payload).then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
     sendResponse({ ok: false, error: 'Unknown message.' });
     return false;
   });
+
+  chrome.alarms?.onAlarm?.addListener((alarm) => {
+    if (alarm.name === SYNC_ALARM_NAME) {
+      importBookmarksFromCapturedApi().then((result) => {
+        if (result.ok && result.data?.session) {
+          const { insertedCount } = result.data.session;
+          if (insertedCount > 0) {
+            void chrome.action?.setBadgeText?.({ text: String(insertedCount) });
+            void chrome.action?.setBadgeBackgroundColor?.({ color: '#14786f' });
+          }
+        }
+      }).catch(() => undefined);
+    }
+  });
+
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area === 'local' && changes.settings) {
+      void updateSyncAlarm();
+    }
+  });
+
+  void updateSyncAlarm();
 }

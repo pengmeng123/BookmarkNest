@@ -5,6 +5,7 @@ interface UseKeyboardNavigationOptions {
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   onOpen: (index: number) => void;
   onToggleSelect: (index: number) => void;
+  onToggleHelp?: () => void;
 }
 
 function isInputElement(element: Element | null): boolean {
@@ -19,11 +20,14 @@ export function useKeyboardNavigation({
   itemCount,
   searchInputRef,
   onOpen,
-  onToggleSelect
+  onToggleSelect,
+  onToggleHelp
 }: UseKeyboardNavigationOptions) {
   const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
-  const optionsRef = useRef({ onOpen, onToggleSelect, searchInputRef });
-  optionsRef.current = { onOpen, onToggleSelect, searchInputRef };
+  const focusedIndexRef = useRef(focusedIndex);
+  focusedIndexRef.current = focusedIndex;
+  const optionsRef = useRef({ onOpen, onToggleSelect, searchInputRef, onToggleHelp });
+  optionsRef.current = { onOpen, onToggleSelect, searchInputRef, onToggleHelp };
 
   useEffect(() => {
     if (focusedIndex !== null && itemCount > 0 && focusedIndex >= itemCount) {
@@ -35,7 +39,7 @@ export function useKeyboardNavigation({
 
   useEffect(() => {
     function handler(event: KeyboardEvent) {
-      const { onOpen, onToggleSelect, searchInputRef } = optionsRef.current;
+      const { onOpen, onToggleSelect, searchInputRef, onToggleHelp } = optionsRef.current;
 
       if (event.key === 'Escape') {
         (document.activeElement as HTMLElement)?.blur?.();
@@ -70,17 +74,18 @@ export function useKeyboardNavigation({
           searchInputRef.current?.focus();
           break;
         case 'o':
-        case 'Enter':
-          setFocusedIndex((prev) => {
-            if (prev !== null) onOpen(prev);
-            return prev;
-          });
+        case 'Enter': {
+          const idx = focusedIndexRef.current;
+          if (idx !== null) onOpen(idx);
           break;
-        case 'x':
-          setFocusedIndex((prev) => {
-            if (prev !== null) onToggleSelect(prev);
-            return prev;
-          });
+        }
+        case 'x': {
+          const idx = focusedIndexRef.current;
+          if (idx !== null) onToggleSelect(idx);
+          break;
+        }
+        case '?':
+          onToggleHelp?.();
           break;
       }
     }

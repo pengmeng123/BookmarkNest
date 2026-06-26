@@ -1,4 +1,4 @@
-import { findBottomCursor, updateGraphqlCursorUrl } from './graphqlCursor';
+import { findBottomCursor, updateGraphqlCursorUrl, removeGraphqlCursor } from './graphqlCursor';
 
 const EVENT_NAME = 'bookmarknest:x-graphql-response';
 const REQUEST_EVENT_NAME = 'bookmarknest:x-bookmarks-request';
@@ -15,7 +15,7 @@ interface BookmarkRequestTemplate {
 }
 
 let lastBookmarkRequest: BookmarkRequestTemplate | null = null;
-let lastBottomCursor: string | null = null;
+let fetchAllRunning = false;
 
 export function shouldCaptureGraphqlUrl(url: string, baseUrl = window.location.origin) {
   const resolvedUrl = new URL(url, baseUrl);
@@ -23,7 +23,6 @@ export function shouldCaptureGraphqlUrl(url: string, baseUrl = window.location.o
 }
 
 function emitGraphqlResponse(url: string, body: unknown) {
-  lastBottomCursor = findBottomCursor(body);
   window.dispatchEvent(new CustomEvent(EVENT_NAME, { detail: { url, body } }));
 }
 
@@ -162,6 +161,38 @@ function sleep(ms: number) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+// A sleep that bails out early when the import is cancelled, so cancellation
+// does not have to wait out the full inter-page delay.
+async function interruptibleSleep(ms: number, isCancelled: () => boolean) {
+  const step = 100;
+  for (let elapsed = 0; elapsed < ms; elapsed += step) {
+    if (isCancelled()) {
+      return;
+    }
+    await sleep(Math.min(step, ms - elapsed));
+  }
+}
+
+// Counts timeline entries that represent an actual tweet, so the pager can stop
+// when X keeps returning cursor-only (empty) pages instead of looping to maxPages.
+function countTweetEntries(value: unknown): number {
+  if (!value || typeof value !== 'object') {
+    return 0;
+  }
+  const record = value as Record<string, unknown>;
+  let count = typeof record.entryId === 'string' && record.entryId.startsWith('tweet-') ? 1 : 0;
+  for (const nested of Object.values(record)) {
+    if (Array.isArray(nested)) {
+      for (const item of nested) {
+        count += countTweetEntries(item);
+      }
+    } else if (nested && typeof nested === 'object') {
+      count += countTweetEntries(nested);
+    }
+  }
+  return count;
+}
+
 window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
   const detail = (event as CustomEvent<{ requestId?: string; maxPages?: number }>).detail;
   const requestId = detail?.requestId;
@@ -170,15 +201,25 @@ window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
   }
 
   void (async () => {
-    if (!lastBookmarkRequest) {
+    if (fetchAllRunning) {
+      emitFetchAllProgress(requestId, { phase: 'error', error: 'An import is already in progress.' });
+      return;
+    }
+    const template = lastBookmarkRequest;
+    if (!template) {
       emitFetchAllProgress(requestId, { phase: 'error', error: 'No Bookmarks API request was captured. Refresh x.com/i/bookmarks and try again.' });
       return;
     }
 
+    fetchAllRunning = true;
+
     const maxPages = Math.max(1, Math.min(detail.maxPages ?? 80, 200));
     const seenCursors = new Set<string>();
-    let cursor = lastBottomCursor;
+    // Always start from the first page (no cursor) so the result is complete and
+    // deterministic regardless of how far the user has scrolled the timeline.
+    let cursor: string | null = null;
     let completedPages = 0;
+    let emptyStreak = 0;
     let cancelled = false;
 
     const cancelHandler = (e: Event) => {
@@ -189,33 +230,28 @@ window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
     window.addEventListener(FETCH_ALL_CANCEL_EVENT_NAME, cancelHandler);
 
     try {
-      for (let page = 1; page <= maxPages && cursor; page += 1) {
-        if (cancelled || seenCursors.has(cursor)) {
+      for (let page = 0; page < maxPages; page += 1) {
+        if (cancelled) {
           break;
         }
-        seenCursors.add(cursor);
-        emitFetchAllProgress(requestId, { phase: 'fetching', page, cursor });
+        if (cursor) {
+          if (seenCursors.has(cursor)) {
+            break;
+          }
+          seenCursors.add(cursor);
+        }
 
+        emitFetchAllProgress(requestId, { phase: 'fetching', page, cursor: cursor ?? undefined });
+
+        const pageUrl = cursor
+          ? updateGraphqlCursorUrl(template.url, cursor)
+          : removeGraphqlCursor(template.url);
+
+        let response: Response;
+        let body: unknown;
         try {
-          const nextUrl = updateGraphqlCursorUrl(lastBookmarkRequest.url, cursor);
-          const response = await originalFetch(nextUrl, cloneRequestInit(lastBookmarkRequest.init));
-          const body = await response.clone().json().catch(() => null);
-          if (!response.ok || !body) {
-            if (completedPages > 0) {
-              emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages, error: `API returned ${response.status} on page ${page}` });
-            } else {
-              emitFetchAllProgress(requestId, { phase: 'error', error: `Bookmarks API request failed with ${response.status}.` });
-            }
-            return;
-          }
-
-          emitGraphqlResponse(nextUrl, body);
-          completedPages += 1;
-          cursor = findBottomCursor(body);
-
-          if (cursor && page < maxPages && !cancelled) {
-            await sleep(1000 + Math.floor(Math.random() * 800));
-          }
+          response = await originalFetch(pageUrl, cloneRequestInit(template.init));
+          body = await response.clone().json().catch(() => null);
         } catch {
           if (completedPages > 0) {
             emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages, error: 'Network error during fetch' });
@@ -224,6 +260,31 @@ window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
           }
           return;
         }
+
+        if (!response.ok || !body) {
+          if (completedPages > 0) {
+            emitFetchAllProgress(requestId, { phase: 'partial', pages: completedPages, error: `API returned ${response.status} on page ${page + 1}` });
+          } else {
+            emitFetchAllProgress(requestId, { phase: 'error', error: `Bookmarks API request failed with ${response.status}.` });
+          }
+          return;
+        }
+
+        emitGraphqlResponse(pageUrl, body);
+        completedPages += 1;
+
+        emptyStreak = countTweetEntries(body) === 0 ? emptyStreak + 1 : 0;
+        const nextCursor = findBottomCursor(body);
+
+        // Stop when X stops handing back tweets or there is no further page.
+        if (emptyStreak >= 2 || !nextCursor) {
+          break;
+        }
+        cursor = nextCursor;
+
+        if (!cancelled) {
+          await interruptibleSleep(1000 + Math.floor(Math.random() * 800), () => cancelled);
+        }
       }
 
       if (cancelled && completedPages > 0) {
@@ -231,9 +292,10 @@ window.addEventListener(FETCH_ALL_EVENT_NAME, (event) => {
       } else if (cancelled) {
         emitFetchAllProgress(requestId, { phase: 'error', error: 'Import cancelled.' });
       } else {
-        emitFetchAllProgress(requestId, { phase: 'done', pages: seenCursors.size });
+        emitFetchAllProgress(requestId, { phase: 'done', pages: completedPages });
       }
     } finally {
+      fetchAllRunning = false;
       window.removeEventListener(FETCH_ALL_CANCEL_EVENT_NAME, cancelHandler);
     }
   })();

@@ -5,8 +5,10 @@ import {
   listFolders,
   listImportSessions,
   listTags,
+  getBookmarkCounts,
   type BookmarkListFilters,
-  type BookmarkListItem
+  type BookmarkListItem,
+  type BookmarkCounts
 } from '../../lib/db/bookmarkRepository';
 import type { Folder, ImportSession, Tag } from '../../shared/types';
 
@@ -15,16 +17,20 @@ export interface LibraryData {
   folders: Folder[];
   tags: Tag[];
   importSessions: ImportSession[];
+  counts: BookmarkCounts;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
 }
+
+const emptyCounts: BookmarkCounts = { total: 0, uncategorized: 0, archived: 0, byFolder: {} };
 
 export function useLibraryData(filters: BookmarkListFilters): LibraryData {
   const [bookmarks, setBookmarks] = useState<BookmarkListItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [importSessions, setImportSessions] = useState<ImportSession[]>([]);
+  const [counts, setCounts] = useState<BookmarkCounts>(emptyCounts);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,16 +38,18 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
     setLoading(true);
     setError(null);
     try {
-      const [nextBookmarks, nextFolders, nextTags, nextImportSessions] = await Promise.all([
+      const [nextBookmarks, nextFolders, nextTags, nextImportSessions, nextCounts] = await Promise.all([
         listBookmarkItems(filters),
         listFolders(),
         listTags(),
-        listImportSessions()
+        listImportSessions(),
+        getBookmarkCounts()
       ]);
       setBookmarks(nextBookmarks);
       setFolders(nextFolders);
       setTags(nextTags);
       setImportSessions(nextImportSessions);
+      setCounts(nextCounts);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load local bookmarks.');
     } finally {
@@ -53,5 +61,5 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
     void refresh();
   }, [refresh]);
 
-  return { bookmarks, folders, tags, importSessions, loading, error, refresh };
+  return { bookmarks, folders, tags, importSessions, counts, loading, error, refresh };
 }

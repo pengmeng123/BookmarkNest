@@ -1,5 +1,7 @@
 import type { BookmarkListItem } from '../db/bookmarkRepository';
 
+export type SortKey = 'source' | 'date-posted' | 'date-imported' | 'author';
+
 export interface SearchMatch {
   bookmark: BookmarkListItem;
   matchedTerms: string[];
@@ -37,6 +39,19 @@ function compareBySourceOrder(left: BookmarkListItem, right: BookmarkListItem) {
   return right.id.localeCompare(left.id);
 }
 
+function getComparator(sortKey: SortKey) {
+  switch (sortKey) {
+    case 'date-posted':
+      return (a: BookmarkListItem, b: BookmarkListItem) => (b.createdAt ?? 0) - (a.createdAt ?? 0);
+    case 'date-imported':
+      return (a: BookmarkListItem, b: BookmarkListItem) => b.importedAt - a.importedAt;
+    case 'author':
+      return (a: BookmarkListItem, b: BookmarkListItem) => a.authorName.localeCompare(b.authorName);
+    default:
+      return compareBySourceOrder;
+  }
+}
+
 export function tokenizeSearchQuery(query: string) {
   return query
     .split(/\s+/)
@@ -44,13 +59,14 @@ export function tokenizeSearchQuery(query: string) {
     .filter(Boolean);
 }
 
-export function searchBookmarks(bookmarks: BookmarkListItem[], query: string): SearchMatch[] {
+export function searchBookmarks(bookmarks: BookmarkListItem[], query: string, sortKey: SortKey = 'source'): SearchMatch[] {
   const terms = tokenizeSearchQuery(query);
+  const comparator = getComparator(sortKey);
 
   if (terms.length === 0) {
     return bookmarks
       .slice()
-      .sort(compareBySourceOrder)
+      .sort(comparator)
       .map((bookmark) => ({ bookmark, matchedTerms: [] }));
   }
 
@@ -59,6 +75,6 @@ export function searchBookmarks(bookmarks: BookmarkListItem[], query: string): S
       const searchText = buildSearchText(bookmark);
       return terms.every((term) => searchText.includes(term));
     })
-    .sort(compareBySourceOrder)
+    .sort(comparator)
     .map((bookmark) => ({ bookmark, matchedTerms: terms }));
 }

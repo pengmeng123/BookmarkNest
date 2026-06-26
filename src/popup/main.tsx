@@ -1,10 +1,11 @@
 import { ExternalLink, LoaderCircle, Upload } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { useTheme } from '../hooks/useTheme';
+import { getBookmarkCounts } from '../lib/db/bookmarkRepository';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import type { ImportSession } from '../shared/types';
 import '../styles/globals.css';
@@ -25,6 +26,12 @@ function Popup() {
   useTheme();
   const [status, setStatus] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    void getBookmarkCounts().then((c) => setTotalCount(c.total));
+    void chrome.action?.setBadgeText?.({ text: '' });
+  }, []);
 
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
     if (importMode) {
@@ -50,6 +57,7 @@ function Popup() {
           ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} found.`
           : 'Import started.'
       );
+      void getBookmarkCounts().then((c) => setTotalCount(c.total));
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Import failed. Please try again.');
     } finally {
@@ -61,7 +69,9 @@ function Popup() {
     <main className="w-[340px] bg-background p-4 text-foreground">
       <header className="mb-4">
         <h1 className="text-lg font-semibold">BookmarkNest</h1>
-        <p className="text-xs text-muted-foreground">No bookmarks imported yet</p>
+        <p className="text-xs text-muted-foreground">
+          {totalCount === null ? ' ' : totalCount === 0 ? 'No bookmarks imported yet' : `${totalCount} bookmarks saved`}
+        </p>
       </header>
       <div className="grid gap-2">
         <Button variant="primary" onClick={() => void sendRuntimeMessage({ type: 'OPEN_APP' })}>

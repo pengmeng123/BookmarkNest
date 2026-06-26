@@ -131,9 +131,6 @@ export function BookmarkCard({
                 <span>Imported {formatDate(bookmark.importedAt)}</span>
               </div>
             </div>
-            {bookmark.locked ? (
-              null
-            ) : null}
           </div>
           <p className="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-foreground">
             <HighlightedText text={bookmark.contentText} terms={matchedTerms} />

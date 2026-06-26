@@ -9,11 +9,16 @@ export function useTheme() {
   const cleanupRef = useRef<() => void>(() => {});
 
   useEffect(() => {
+    let active = true;
     void getSettings().then((settings) => {
+      if (!active) return;
       setThemeState(settings.theme);
       cleanupRef.current = applyTheme(settings.theme);
     });
-    return () => cleanupRef.current();
+    return () => {
+      active = false;
+      cleanupRef.current();
+    };
   }, []);
 
   async function setTheme(next: ThemePreference) {

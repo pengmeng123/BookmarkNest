@@ -70,6 +70,8 @@ export interface Settings {
   theme: ThemePreference;
   defaultExportFormat: ExportFormat;
   language: 'en';
+  autoSync: boolean;
+  syncIntervalMinutes: number;
 }
 
 export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';

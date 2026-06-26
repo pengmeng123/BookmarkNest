@@ -385,15 +385,35 @@ function fetchAllBookmarkPages(
 
   return new Promise<FetchAllResult>((resolve) => {
     let settled = false;
-    const timeoutId = window.setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(capturedBookmarks.size > 0 ? 'partial' : 'error');
-    }, 180_000);
+    // Watchdog: abort only after a stretch of *no progress*, rather than a fixed
+    // total budget. Large accounts legitimately take minutes, but a stalled page
+    // (expired session, network wedge) should still fail fast — and crucially it
+    // tells the page-side pager to stop so its `fetchAllRunning` flag resets.
+    const IDLE_TIMEOUT = 60_000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    function stopPager() {
+      window.dispatchEvent(new CustomEvent(FETCH_ALL_CANCEL_EVENT_NAME, { detail: { requestId } }));
+    }
+
+    function armWatchdog() {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        stopPager();
+        cleanup();
+        resolve(capturedBookmarks.size > 0 ? 'partial' : 'error');
+      }, IDLE_TIMEOUT);
+    }
 
     function cleanup() {
-      window.clearTimeout(timeoutId);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
       window.removeEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
     }
 
@@ -414,8 +434,11 @@ function fetchAllBookmarkPages(
       }>).detail;
       if (detail?.requestId !== requestId) return;
 
+      // Any progress means the pager is alive — reset the watchdog.
+      armWatchdog();
+
       if (controller.cancelled) {
-        window.dispatchEvent(new CustomEvent(FETCH_ALL_CANCEL_EVENT_NAME, { detail: { requestId } }));
+        stopPager();
         finish(capturedBookmarks.size > 0 ? 'partial' : 'error');
         return;
       }
@@ -440,6 +463,7 @@ function fetchAllBookmarkPages(
     }
 
     window.addEventListener(FETCH_ALL_PROGRESS_EVENT_NAME, handleProgress);
+    armWatchdog();
     window.dispatchEvent(new CustomEvent(FETCH_ALL_EVENT_NAME, { detail: { requestId, maxPages: 120 } }));
   });
 }
@@ -458,6 +482,9 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
 
   try {
     if (mode === 'auto-scroll') {
+      // Re-fetch from the first page is authoritative, so drop anything passively
+      // captured during browsing to avoid mixing in stale entries.
+      capturedBookmarks.clear();
       const fetchResult = await fetchAllBookmarkPages(currentImportController, (progress) => {
         if (progress.phase === 'fetching') {
           const count = capturedBookmarks.size;
@@ -580,12 +607,8 @@ window.addEventListener(REQUEST_EVENT_NAME, (event) => {
 
 ensureWidget();
 
-let lastUrl = window.location.href;
 let widgetCheckScheduled = false;
 const observer = new MutationObserver(() => {
-  if (window.location.href !== lastUrl) {
-    lastUrl = window.location.href;
-  }
   if (!widgetCheckScheduled) {
     widgetCheckScheduled = true;
     requestAnimationFrame(() => {

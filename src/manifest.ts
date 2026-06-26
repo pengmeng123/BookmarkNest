@@ -22,7 +22,8 @@ export const manifest: ManifestV3Export = {
     'webRequest',
     'declarativeNetRequest',
     'declarativeNetRequestWithHostAccess',
-    'cookies'
+    'cookies',
+    'alarms'
   ],
   host_permissions: ['https://x.com/*', 'https://twitter.com/*'],
   content_scripts: [

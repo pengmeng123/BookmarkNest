@@ -1,5 +1,5 @@
 import { AlertTriangle, Download, LoaderCircle, Trash2, Upload } from 'lucide-react';
-import { StrictMode, useMemo, useRef, useState } from 'react';
+import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
@@ -10,6 +10,7 @@ import { useTheme } from '../hooks/useTheme';
 import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
 import { downloadText } from '../lib/export/download';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
+import { getSettings, saveSettings } from '../lib/storage/localStorage';
 import type { ImportDiagnostics } from '../shared/types';
 import '../styles/globals.css';
 
@@ -21,6 +22,8 @@ function Options() {
   const [status, setStatus] = useState<Status>(null);
   const [busyAction, setBusyAction] = useState<'export' | 'import' | 'clear' | 'diagnostics' | null>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  const [autoSync, setAutoSync] = useState(false);
+  const [syncInterval, setSyncInterval] = useState(60);
   const [versionClicks, setVersionClicks] = useState(0);
   const showDiagnostics = versionClicks >= 5;
   const extensionVersion = useMemo(() => {
@@ -28,6 +31,13 @@ function Options() {
       return '0.1.0';
     }
     return chrome.runtime?.getManifest?.().version ?? '0.1.0';
+  }, []);
+
+  useEffect(() => {
+    void getSettings().then((s) => {
+      setAutoSync(s.autoSync);
+      setSyncInterval(s.syncIntervalMinutes);
+    });
   }, []);
 
   async function handleExportBackup() {
@@ -128,6 +138,46 @@ function Options() {
               <option value="dark">Dark</option>
             </SelectInput>
           </Field>
+        </div>
+        <div className="rounded-app border border-border bg-surface p-4">
+          <h2 className="text-sm font-semibold">Auto-sync</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Periodically fetch new X bookmarks in the background via the API.
+          </p>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={autoSync}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setAutoSync(next);
+                  void saveSettings({ autoSync: next });
+                }}
+                className="h-4 w-4 rounded border-border accent-primary"
+              />
+              Enable auto-sync
+            </label>
+            {autoSync ? (
+              <Field label="Sync interval">
+                <SelectInput
+                  value={String(syncInterval)}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    setSyncInterval(next);
+                    void saveSettings({ syncIntervalMinutes: next });
+                  }}
+                >
+                  <option value="30">Every 30 minutes</option>
+                  <option value="60">Every hour</option>
+                  <option value="180">Every 3 hours</option>
+                  <option value="360">Every 6 hours</option>
+                  <option value="720">Every 12 hours</option>
+                  <option value="1440">Every 24 hours</option>
+                </SelectInput>
+              </Field>
+            ) : null}
+          </div>
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>

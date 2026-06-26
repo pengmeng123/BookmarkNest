@@ -18,7 +18,7 @@ import {
   Upload,
   X
 } from 'lucide-react';
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
@@ -45,7 +45,7 @@ import {
 } from '../lib/db/bookmarkRepository';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import { cn } from '../lib/utils/cn';
-import { searchBookmarks } from '../lib/search/searchBookmarks';
+import { searchBookmarks, type SortKey } from '../lib/search/searchBookmarks';
 import { downloadBookmarks } from '../lib/export/download';
 import type { ImportSession } from '../shared/types';
 import '../styles/globals.css';
@@ -131,6 +131,7 @@ function ImportHistory({ sessions }: { sessions: ImportSession[] }) {
 function AppSidebar({
   folders,
   tags,
+  counts,
   activeFolderId,
   activeTagId,
   includeArchived,
@@ -145,6 +146,7 @@ function AppSidebar({
 }: {
   folders: { id: string; name: string }[];
   tags: { id: string; name: string; usageCount: number; color: string }[];
+  counts: { total: number; uncategorized: number; archived: number; byFolder: Record<string, number> };
   activeFolderId: FolderFilter;
   activeTagId?: string | null;
   includeArchived: boolean;
@@ -175,14 +177,17 @@ function AppSidebar({
         <button className={folderItemClass(activeFolderId === undefined && !includeArchived)} onClick={() => onFolderChange(undefined)}>
           <Inbox size={16} />
           <span className="truncate">All bookmarks</span>
+          <span className="ml-auto text-xs text-muted-foreground">{counts.total}</span>
         </button>
         <button className={folderItemClass(activeFolderId === null)} onClick={() => onFolderChange(null)}>
           <Folder size={16} />
           <span className="truncate">Uncategorized</span>
+          <span className="ml-auto text-xs text-muted-foreground">{counts.uncategorized}</span>
         </button>
         <button className={folderItemClass(includeArchived)} onClick={() => onArchivedChange(!includeArchived)}>
           <Archive size={16} />
           <span className="truncate">Archived</span>
+          <span className="ml-auto text-xs text-muted-foreground">{counts.archived}</span>
         </button>
       </div>
 
@@ -198,6 +203,7 @@ function AppSidebar({
             <button className={cn(folderItemClass(activeFolderId === folder.id), 'min-w-0 flex-1')} onClick={() => onFolderChange(folder.id)}>
               <Folder size={16} />
               <span className="truncate">{folder.name}</span>
+              <span className="ml-auto text-xs text-muted-foreground">{counts.byFolder[folder.id] ?? 0}</span>
             </button>
             <button className={actionButtonClass} onClick={() => onRenameFolder(folder.id)} aria-label={`Rename ${folder.name}`}>
               <Pencil size={14} />
@@ -409,6 +415,8 @@ function App() {
   const [includeArchived, setIncludeArchived] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('source');
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
   const [moveTargetIds, setMoveTargetIds] = useState<string[] | null>(null);
@@ -423,8 +431,8 @@ function App() {
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived, isPro }), [folderId, tagId, includeArchived, isPro]);
   const library = useLibraryData(filters);
   const searchMatches = useMemo(
-    () => searchBookmarks(library.bookmarks, debouncedSearchQuery),
-    [library.bookmarks, debouncedSearchQuery]
+    () => searchBookmarks(library.bookmarks, debouncedSearchQuery, sortKey),
+    [library.bookmarks, debouncedSearchQuery, sortKey]
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const { focusedIndex } = useKeyboardNavigation({
@@ -439,7 +447,8 @@ function App() {
       if (bookmark && !bookmark.locked) {
         handleSelectedChange(bookmark.id, !selectedIds.has(bookmark.id));
       }
-    }
+    },
+    onToggleHelp: () => setShowShortcuts((prev) => !prev)
   });
 
   async function refreshAfter(action: Promise<unknown>) {
@@ -810,6 +819,10 @@ function App() {
   }, [importStatus]);
 
   useEffect(() => {
+    void chrome.action?.setBadgeText?.({ text: '' });
+  }, []);
+
+  useEffect(() => {
     setSelectedIds(new Set());
   }, [folderId, tagId, includeArchived, debouncedSearchQuery]);
 
@@ -935,6 +948,7 @@ function App() {
         <AppSidebar
           folders={library.folders}
           tags={library.tags}
+          counts={library.counts}
           activeFolderId={folderId}
           activeTagId={tagId}
           includeArchived={includeArchived}
@@ -969,6 +983,17 @@ function App() {
                   </button>
                 ) : null}
               </label>
+              <select
+                className="h-11 rounded-app border border-border bg-background px-3 text-sm text-foreground shadow-inner outline-none"
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as SortKey)}
+                aria-label="Sort bookmarks"
+              >
+                <option value="source">Source order</option>
+                <option value="date-posted">Date posted</option>
+                <option value="date-imported">Date imported</option>
+                <option value="author">Author</option>
+              </select>
               <div className="flex flex-wrap items-center gap-2">
                   <Button variant="primary" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
                     {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
@@ -1103,6 +1128,24 @@ function App() {
       <div className="hidden lg:fixed lg:bottom-4 lg:left-4 lg:block lg:w-[280px]">
         <ImportHistory sessions={library.importSessions} />
       </div>
+      <Dialog open={showShortcuts} title="Keyboard shortcuts" onClose={() => setShowShortcuts(false)}>
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
+          {([
+            ['j / ↓', 'Next bookmark'],
+            ['k / ↑', 'Previous bookmark'],
+            ['o / Enter', 'Open in new tab'],
+            ['x', 'Toggle selection'],
+            ['/', 'Focus search'],
+            ['Esc', 'Clear focus'],
+            ['?', 'Toggle this help'],
+          ] as const).map(([key, desc]) => (
+            <Fragment key={key}>
+              <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">{key}</kbd>
+              <span className="text-muted-foreground">{desc}</span>
+            </Fragment>
+          ))}
+        </div>
+      </Dialog>
     </PageShell>
   );
 }

@@ -11,6 +11,7 @@ export interface JsonBackup {
     authorName: string;
     authorHandle: string;
     contentText: string;
+    mediaUrls: string[];
     tags: string[];
     folder: string | null;
     importedAt: number;

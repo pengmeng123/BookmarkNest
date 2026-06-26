@@ -50,3 +50,11 @@ export function updateGraphqlCursorUrl(url: string, cursor: string, baseUrl = 'h
   resolvedUrl.searchParams.set('variables', JSON.stringify(variables));
   return resolvedUrl.toString();
 }
+
+export function removeGraphqlCursor(url: string, baseUrl = 'https://x.com') {
+  const resolvedUrl = new URL(url, baseUrl);
+  const variables = JSON.parse(resolvedUrl.searchParams.get('variables') ?? '{}') as Record<string, unknown>;
+  delete variables.cursor;
+  resolvedUrl.searchParams.set('variables', JSON.stringify(variables));
+  return resolvedUrl.toString();
+}

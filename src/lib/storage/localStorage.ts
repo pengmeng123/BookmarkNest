@@ -6,7 +6,9 @@ const LICENSE_KEY = 'license';
 export const defaultSettings: Settings = {
   theme: 'system',
   defaultExportFormat: 'json',
-  language: 'en'
+  language: 'en',
+  autoSync: false,
+  syncIntervalMinutes: 60
 };
 
 export const emptyLicenseData: LicenseData = {
