@@ -91,6 +91,70 @@ describe('parseGraphqlBookmarks', () => {
     expect(bookmarks[1].input.mediaUrls).toEqual(['https://pbs.twimg.com/media/second.jpg']);
   });
 
+  it('reads author fields from the new core/avatar schema', () => {
+    const response = {
+      data: {
+        bookmark_timeline_v2: {
+          timeline: {
+            instructions: [
+              {
+                type: 'TimelineAddEntries',
+                entries: [
+                  {
+                    entryId: 'tweet-9',
+                    sortIndex: '950',
+                    content: {
+                      itemContent: {
+                        tweet_results: {
+                          result: {
+                            __typename: 'Tweet',
+                            rest_id: '9',
+                            core: {
+                              user_results: {
+                                result: {
+                                  __typename: 'User',
+                                  rest_id: '777',
+                                  core: {
+                                    name: 'Core User',
+                                    screen_name: 'coreuser'
+                                  },
+                                  avatar: {
+                                    image_url: 'https://pbs.twimg.com/profile_images/core.jpg'
+                                  },
+                                  legacy: {}
+                                }
+                              }
+                            },
+                            legacy: {
+                              full_text: 'New schema tweet',
+                              created_at: 'Wed Jun 24 12:00:00 +0000 2026'
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    };
+
+    const bookmarks = parseGraphqlBookmarks(response);
+
+    expect(bookmarks).toHaveLength(1);
+    expect(bookmarks[0].input).toMatchObject({
+      tweetId: '9',
+      tweetUrl: 'https://x.com/coreuser/status/9',
+      authorName: 'Core User',
+      authorHandle: 'coreuser',
+      authorAvatarUrl: 'https://pbs.twimg.com/profile_images/core.jpg',
+      contentText: 'New schema tweet'
+    });
+  });
+
   it('parses TweetWithVisibilityResults wrappers with nested user data', () => {
     const response = {
       data: {

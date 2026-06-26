@@ -93,7 +93,6 @@ export type ExtensionMessage =
   | { type: 'START_X_IMPORT'; mode?: 'visible' | 'auto-scroll' }
   | { type: 'GET_IMPORT_DIAGNOSTICS' }
   | { type: 'CAPTURE_X_BOOKMARKS_REQUEST'; payload: CapturedBookmarksRequest }
-  | { type: 'GET_LOADED_X_BOOKMARKS'; tweetIds?: string[]; autoScroll?: boolean }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }
   | { type: 'GET_ACTIVE_TAB_IMPORT_STATE' };
 

@@ -62,18 +62,46 @@ function findTweetObject(value: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function findUserLegacy(value: unknown): Record<string, unknown> | null {
+interface UserFields {
+  screenName?: string;
+  name?: string;
+  avatar?: string;
+}
+
+// X moved screen_name/name out of the user's `legacy` object into a new `core`
+// object, and the avatar into `avatar.image_url`. Different responses (and the
+// transition period) place them under `core`, `legacy`, or directly on the user
+// node, so check all three at each node and walk the author subtree.
+function pickUserFieldsFromNode(value: Record<string, unknown>): UserFields | null {
+  const core = isRecord(value.core) ? value.core : undefined;
+  const legacy = isRecord(value.legacy) ? value.legacy : undefined;
+  const avatar = isRecord(value.avatar) ? value.avatar : undefined;
+
+  const screenName = stringValue(core?.screen_name) ?? stringValue(legacy?.screen_name) ?? stringValue(value.screen_name);
+  const name = stringValue(core?.name) ?? stringValue(legacy?.name) ?? stringValue(value.name);
+  const avatarUrl = stringValue(avatar?.image_url)
+    ?? stringValue(legacy?.profile_image_url_https)
+    ?? stringValue(value.profile_image_url_https)
+    ?? stringValue(value.image_url);
+
+  if (screenName || name) {
+    return { screenName, name, avatar: avatarUrl };
+  }
+  return null;
+}
+
+function findUserFields(value: unknown): UserFields | null {
   if (!isRecord(value)) {
     return null;
   }
 
-  const legacy = isRecord(value.legacy) ? value.legacy : undefined;
-  if (legacy && (legacy.screen_name || legacy.name)) {
-    return legacy;
+  const direct = pickUserFieldsFromNode(value);
+  if (direct) {
+    return direct;
   }
 
-  for (const key of ['result', 'user', 'user_results', 'user_result']) {
-    const nested = findUserLegacy(value[key]);
+  for (const key of ['result', 'user', 'user_results', 'user_result', 'core']) {
+    const nested = findUserFields(value[key]);
     if (nested) {
       return nested;
     }
@@ -81,7 +109,7 @@ function findUserLegacy(value: unknown): Record<string, unknown> | null {
 
   for (const nestedValue of Object.values(value)) {
     if (isRecord(nestedValue)) {
-      const nested = findUserLegacy(nestedValue);
+      const nested = findUserFields(nestedValue);
       if (nested) {
         return nested;
       }
@@ -230,11 +258,11 @@ function parseTweet(tweet: Record<string, unknown>, sortIndex?: string): Graphql
   }
 
   const contentText = expandTcoUrls(rawText, legacy);
-  const userLegacy = findUserLegacy(tweet.core ?? tweet);
+  const userInfo = findUserFields(tweet.core ?? tweet);
   const userId = findUserId(tweet.core ?? tweet);
-  const screenName = stringValue(userLegacy?.screen_name);
+  const screenName = userInfo?.screenName;
   const authorHandle = screenName ?? (userId ? `user_${userId}` : 'unknown');
-  const authorName = stringValue(userLegacy?.name) ?? screenName ?? (userId ? `User ${userId}` : 'Unknown user');
+  const authorName = userInfo?.name ?? screenName ?? (userId ? `User ${userId}` : 'Unknown user');
   const createdAtText = stringValue(legacy.created_at);
   const createdAt = createdAtText ? Date.parse(createdAtText) : undefined;
 
@@ -246,7 +274,7 @@ function parseTweet(tweet: Record<string, unknown>, sortIndex?: string): Graphql
       authorId: userId,
       authorName,
       authorHandle,
-      authorAvatarUrl: stringValue(userLegacy?.profile_image_url_https),
+      authorAvatarUrl: userInfo?.avatar,
       contentText,
       mediaUrls: parseMediaUrls(legacy),
       createdAtText,

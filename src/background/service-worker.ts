@@ -466,10 +466,20 @@ function parseUserProfile(body: unknown) {
   const data = isRecord(body) ? body.data : undefined;
   const user = isRecord(data) ? data.user : undefined;
   const result = isRecord(user) ? user.result : undefined;
-  const legacy = isRecord(result) && isRecord(result.legacy) ? result.legacy : undefined;
-  const screenName = typeof legacy?.screen_name === 'string' ? legacy.screen_name : undefined;
-  const name = typeof legacy?.name === 'string' ? legacy.name : undefined;
-  const avatar = typeof legacy?.profile_image_url_https === 'string' ? legacy.profile_image_url_https : undefined;
+  if (!isRecord(result)) {
+    return null;
+  }
+
+  // Newer responses place screen_name/name under `core` and the avatar under
+  // `avatar.image_url`; older ones keep them in `legacy`. Read both.
+  const core = isRecord(result.core) ? result.core : undefined;
+  const legacy = isRecord(result.legacy) ? result.legacy : undefined;
+  const avatarObj = isRecord(result.avatar) ? result.avatar : undefined;
+  const pick = (value: unknown) => (typeof value === 'string' && value ? value : undefined);
+
+  const screenName = pick(core?.screen_name) ?? pick(legacy?.screen_name);
+  const name = pick(core?.name) ?? pick(legacy?.name);
+  const avatar = pick(avatarObj?.image_url) ?? pick(legacy?.profile_image_url_https);
 
   if (!screenName && !name && !avatar) {
     return null;
@@ -560,112 +570,6 @@ async function enrichBookmarkAuthors(bookmarks: ImportPayload['bookmarks'], requ
       authorAvatarUrl: profile.avatar ?? bookmark.authorAvatarUrl
     };
   });
-}
-
-async function collectLoadedXBookmarkMetadata(tweetIds: string[] = []) {
-  let tabs = await chrome.tabs.query({ url: ['https://x.com/i/bookmarks*', 'https://twitter.com/i/bookmarks*'] });
-  const byTweetId = new Map<string, ImportPayload['bookmarks'][number]>();
-  const [previousActiveTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const shouldActivateXTab = tweetIds.length > 0;
-  let temporaryTabId: number | undefined;
-
-  try {
-    if (shouldActivateXTab && tabs.length === 0) {
-      const tab = await chrome.tabs.create({ url: 'https://x.com/i/bookmarks', active: true });
-      temporaryTabId = tab.id;
-      tabs = tab ? [tab] : [];
-      await sleep(2500);
-    }
-
-    for (const tab of tabs) {
-      if (!tab.id) {
-        continue;
-      }
-
-      try {
-        if (shouldActivateXTab) {
-          if (typeof tab.windowId === 'number') {
-            await chrome.windows?.update?.(tab.windowId, { focused: true }).catch(() => undefined);
-          }
-          await chrome.tabs.update(tab.id, { active: true });
-          await sleep(900);
-        }
-
-        let parsed: MessageResponse<ImportPayload['bookmarks']> | null = null;
-        for (let attempt = 0; attempt < 6; attempt += 1) {
-          try {
-            const response = await chrome.tabs.sendMessage(tab.id, {
-              type: 'GET_LOADED_X_BOOKMARKS',
-              tweetIds,
-              autoScroll: tweetIds.length > 0
-            });
-            parsed = response as MessageResponse<ImportPayload['bookmarks']>;
-            break;
-          } catch {
-            await sleep(700);
-          }
-        }
-
-        if (!parsed?.ok || !Array.isArray(parsed.data)) {
-          continue;
-        }
-
-        for (const bookmark of parsed.data) {
-          if (bookmark.tweetId) {
-            byTweetId.set(bookmark.tweetId, bookmark);
-          }
-        }
-      } catch {
-        // Ignore tabs without the current content script.
-      }
-    }
-  } finally {
-    if (temporaryTabId) {
-      await chrome.tabs.remove(temporaryTabId).catch(() => undefined);
-    }
-    if (shouldActivateXTab && previousActiveTab?.id) {
-      if (typeof previousActiveTab.windowId === 'number') {
-        await chrome.windows?.update?.(previousActiveTab.windowId, { focused: true }).catch(() => undefined);
-      }
-      await chrome.tabs.update(previousActiveTab.id, { active: true }).catch(() => undefined);
-    }
-  }
-
-  return byTweetId;
-}
-
-async function mergeLoadedXMetadata(bookmarks: ImportPayload['bookmarks']) {
-  const loaded = await collectLoadedXBookmarkMetadata(bookmarks.map((bookmark) => bookmark.tweetId).filter((tweetId): tweetId is string => Boolean(tweetId)));
-  const loadedValues = Array.from(loaded.values());
-  const stats = {
-    domMatchedCount: loaded.size,
-    avatarMatchedCount: loadedValues.filter((bookmark) => Boolean(bookmark.authorAvatarUrl)).length
-  };
-
-  if (loaded.size === 0) {
-    return { bookmarks, stats };
-  }
-
-  return {
-    bookmarks: bookmarks.map((bookmark) => {
-      const metadata = bookmark.tweetId ? loaded.get(bookmark.tweetId) : undefined;
-      if (!metadata) {
-        return bookmark;
-      }
-
-      return {
-        ...bookmark,
-        tweetUrl: metadata.tweetUrl ?? bookmark.tweetUrl,
-        authorName: metadata.authorName || bookmark.authorName,
-        authorHandle: metadata.authorHandle || bookmark.authorHandle,
-        authorAvatarUrl: metadata.authorAvatarUrl ?? bookmark.authorAvatarUrl,
-        createdAtText: metadata.createdAtText ?? bookmark.createdAtText,
-        createdAt: metadata.createdAt ?? bookmark.createdAt,
-        mediaUrls: metadata.mediaUrls?.length ? metadata.mediaUrls : bookmark.mediaUrls
-      };
-    }),
-    stats
-  };
 }
 
 async function waitForCapturedBookmarksRequest(timeoutMs = 15000) {
@@ -780,15 +684,16 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
     return { ok: false, error: `${baseError} Refresh x.com/i/bookmarks and try again.` };
   }
 
-  const domEnriched = await mergeLoadedXMetadata(bookmarks);
-  const enrichedBookmarks = await enrichBookmarkAuthors(domEnriched.bookmarks, requestTemplate);
+  // Author metadata comes from the GraphQL response itself; the rare gaps are
+  // filled headlessly via UserByRestId. We intentionally never open, focus, or
+  // scroll an x.com tab here so background/auto-sync stays completely silent.
+  const enrichedBookmarks = await enrichBookmarkAuthors(bookmarks, requestTemplate);
   const diagnostics = {
     reason: fetchError ? 'import_partial' : 'import_completed',
     status: fetchError ? 'partial' : 'completed',
     source: 'x_graphql_bookmarks',
     queryId: requestTemplate.queryId ?? parseBookmarksQueryId(requestTemplate.url) ?? null,
     apiFoundCount: bookmarks.length,
-    domMatchedCount: domEnriched.stats.domMatchedCount,
     avatarMatchedCount: enrichedBookmarks.filter((bookmark) => Boolean(bookmark.authorAvatarUrl)).length,
     missingAvatarCount: enrichedBookmarks.filter((bookmark) => !bookmark.authorAvatarUrl).length,
     missingAuthorCount: enrichedBookmarks.filter((bookmark) => bookmark.authorHandle.startsWith('user_') || bookmark.authorHandle === 'unknown').length,

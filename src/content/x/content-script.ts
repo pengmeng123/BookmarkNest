@@ -3,7 +3,6 @@ import type { BookmarkInput } from '../../shared/types';
 import { runImportFromLoadedCards, runImportWithAutoScroll } from './importRunner';
 import { parseGraphqlBookmarks, type GraphqlBookmark } from './graphqlParser';
 import { isXBookmarkPage } from './pageDetection';
-import { parseLoadedBookmarkCards } from './parser';
 
 const GRAPHQL_EVENT_NAME = 'bookmarknest:x-graphql-response';
 const REQUEST_EVENT_NAME = 'bookmarknest:x-bookmarks-request';
@@ -314,65 +313,6 @@ function createRequestId() {
   return `bookmarknest_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function collectParsedBookmarkInputs() {
-  return parseLoadedBookmarkCards(document).parsed.map((card) => card.input);
-}
-
-async function collectLoadedBookmarkMetadata(tweetIds: string[] = [], autoScroll = false) {
-  const targetIds = new Set(tweetIds.filter(Boolean));
-  const collected = new Map<string, ReturnType<typeof collectParsedBookmarkInputs>[number]>();
-
-  function collectVisible() {
-    for (const bookmark of collectParsedBookmarkInputs()) {
-      const key = bookmark.tweetId ?? bookmark.tweetUrl;
-      if (key) {
-        collected.set(key, bookmark);
-      }
-    }
-  }
-
-  collectVisible();
-  if (!autoScroll || targetIds.size === 0) {
-    return Array.from(collected.values());
-  }
-
-  window.scrollTo({ top: 0, behavior: 'auto' });
-  await sleep(900);
-  collectVisible();
-
-  let idleRounds = 0;
-  let lastMatchedCount = 0;
-  const maxScrolls = Math.max(30, Math.min(120, Math.ceil(targetIds.size * 2.5)));
-
-  for (let scrolls = 0; scrolls < maxScrolls; scrolls += 1) {
-    const matchedCount = Array.from(targetIds).filter((tweetId) => collected.has(tweetId)).length;
-    if (matchedCount >= targetIds.size) {
-      break;
-    }
-
-    if (matchedCount === lastMatchedCount) {
-      idleRounds += 1;
-    } else {
-      idleRounds = 0;
-    }
-    lastMatchedCount = matchedCount;
-
-    if (scrolls > 8 && idleRounds >= 8) {
-      break;
-    }
-
-    window.scrollBy({ top: Math.max(700, Math.floor(window.innerHeight * 0.9)), behavior: 'auto' });
-    await sleep(1100);
-    collectVisible();
-  }
-
-  return Array.from(collected.values());
-}
-
 // ─── Import Flow ────────────────────────────────────────
 
 type FetchAllResult = 'done' | 'partial' | 'error';
@@ -624,11 +564,6 @@ observer.observe(document.documentElement, { childList: true, subtree: true });
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   if (message.type === 'START_X_IMPORT') {
     startImport(message.mode).then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'GET_LOADED_X_BOOKMARKS') {
-    collectLoadedBookmarkMetadata(message.tweetIds, message.autoScroll).then((bookmarks) => sendResponse({ ok: true, data: bookmarks }));
     return true;
   }
 
