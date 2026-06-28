@@ -1,4 +1,5 @@
-import { ExternalLink, LoaderCircle, Upload } from 'lucide-react';
+import '../lib/utils/translateGuard';
+import { ExternalLink, LoaderCircle, Settings, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -81,6 +82,10 @@ function Popup() {
         <Button onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
           {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
           {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
+        </Button>
+        <Button variant="ghost" onClick={() => void chrome.runtime?.openOptionsPage?.()}>
+          <Settings size={16} />
+          Settings
         </Button>
         <Button variant="ghost" onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}>
           Upgrade / Manage License

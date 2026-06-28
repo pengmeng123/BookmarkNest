@@ -8,7 +8,8 @@ export const defaultSettings: Settings = {
   defaultExportFormat: 'json',
   language: 'en',
   autoSync: false,
-  syncIntervalMinutes: 60
+  syncIntervalMinutes: 60,
+  mirrorRemovals: false
 };
 
 export const emptyLicenseData: LicenseData = {

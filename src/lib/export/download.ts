@@ -6,30 +6,23 @@ export async function downloadText(filename: string, content: string, mimeType =
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);
 
-  if (typeof chrome !== 'undefined' && chrome.downloads?.download) {
-    try {
-      const downloadId = await chrome.downloads.download({ url, filename, saveAs: true });
-      await new Promise<void>((resolve) => {
-        function onChange(delta: chrome.downloads.DownloadDelta) {
-          if (delta.id !== downloadId) return;
-          if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
-            chrome.downloads.onChanged.removeListener(onChange);
-            resolve();
-          }
-        }
-        chrome.downloads.onChanged.addListener(onChange);
-      });
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    return;
+  // A same-origin blob URL with a `download` attribute saves the file without
+  // navigating the page. We deliberately avoid chrome.downloads here: its
+  // onChanged-wait could hang forever (blanking the page until a reload) and
+  // blob URLs hit MV3 quirks in extension pages.
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.rel = 'noopener';
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } finally {
+    // Revoke once the click has had time to kick off the download.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
-
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export async function downloadBookmarks(format: ExportFormat, bookmarks: BookmarkListItem[]) {

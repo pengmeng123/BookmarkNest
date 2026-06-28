@@ -408,6 +408,28 @@ function fetchAllBookmarkPages(
   });
 }
 
+// When the page-side pager captures nothing (X never re-issued a Bookmarks
+// request this session, so there is no template to page from), fall back to the
+// service worker's API import, which can scrape the queryId from x.com's JS
+// bundles and reuse webRequest-captured headers. Mirrors the popup's robust path.
+async function runApiFallbackImport(): Promise<MessageResponse> {
+  setWidget('saving', 'Retrying via API...');
+  const response = (await chrome.runtime.sendMessage({ type: 'RUN_X_API_IMPORT' })) as
+    | MessageResponse<{ session: { insertedCount: number; duplicateCount: number; status: string } }>
+    | undefined;
+
+  if (response?.ok && response.data?.session) {
+    const { insertedCount, duplicateCount } = response.data.session;
+    const dupText = duplicateCount > 0 ? `${duplicateCount} dup` : '';
+    setWidget('done', `${insertedCount} saved`, dupText);
+    return { ok: true, data: { status: response.data.session.status, ...response.data } };
+  }
+
+  const msg = response?.error ?? 'Unable to fetch X bookmarks through the API.';
+  setWidget('error', 'Import failed', msg.length > 40 ? msg.slice(0, 40) + '…' : msg);
+  return { ok: false, error: msg };
+}
+
 async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise<MessageResponse> {
   if (!isXBookmarkPage(window.location.href)) {
     return { ok: false, error: 'Current page is not an X bookmarks page.' };
@@ -450,19 +472,17 @@ async function startImport(mode: 'visible' | 'auto-scroll' = 'visible'): Promise
       }
 
       if (fetchResult === 'error' && capturedBookmarks.size === 0) {
-        setWidget('error', 'Import failed', 'No bookmarks found');
-        return { ok: false, error: 'Unable to fetch X bookmarks through the API.' };
+        return runApiFallbackImport();
       }
 
       if (capturedBookmarks.size === 0) {
-        setWidget('error', 'No bookmarks', 'Try refreshing');
-        return { ok: false, error: 'The X Bookmarks API returned no bookmark items.' };
+        return runApiFallbackImport();
       }
 
       setWidget('saving', `Saving ${capturedBookmarks.size}...`);
       const result = await runImportWithAutoScroll(
         window.location.href, document, currentImportController, undefined,
-        { apiBookmarks: getCapturedBookmarks, maxScrolls: 0 }
+        { apiBookmarks: getCapturedBookmarks, maxScrolls: 0, complete: fetchResult === 'done' }
       );
 
       if (fetchResult === 'partial') {

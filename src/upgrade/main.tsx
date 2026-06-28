@@ -1,4 +1,5 @@
-import { BadgeDollarSign, CalendarClock, Check, ExternalLink, Infinity as InfinityIcon, KeyRound, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
+import '../lib/utils/translateGuard';
+import { BadgeDollarSign, CalendarClock, Check, ExternalLink, KeyRound, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -11,7 +12,7 @@ import type { LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
 const MONTHLY_CHECKOUT_URL = import.meta.env.VITE_CREEM_MONTHLY_CHECKOUT_URL as string | undefined;
-const LIFETIME_CHECKOUT_URL = (import.meta.env.VITE_CREEM_LIFETIME_CHECKOUT_URL ?? import.meta.env.VITE_CREEM_CHECKOUT_URL) as string | undefined;
+const ANNUAL_CHECKOUT_URL = (import.meta.env.VITE_CREEM_ANNUAL_CHECKOUT_URL ?? import.meta.env.VITE_CREEM_CHECKOUT_URL) as string | undefined;
 const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) ?? 'pp12111@outlook.com';
 
 const freeFeatures = [
@@ -152,14 +153,13 @@ function Upgrade() {
           />
           <PlanCard
             title="Monthly Pro"
-            price="$1"
+            price="$2"
             suffix="/ month"
             caption="Low-cost access for active X users"
             badge={license.pro ? 'Pro enabled' : 'Most flexible'}
-            highlighted
             features={proFeatures.map((text) => ({ text, included: true }))}
             action={
-              <Button variant="primary" className="w-full" onClick={() => openCheckout(MONTHLY_CHECKOUT_URL, setStatus)}>
+              <Button variant="secondary" className="w-full" onClick={() => openCheckout(MONTHLY_CHECKOUT_URL, setStatus)}>
                 Start monthly
                 <ExternalLink size={16} />
               </Button>
@@ -167,18 +167,20 @@ function Upgrade() {
             note="Subscription billing. Cancel from the payment provider account portal."
           />
           <PlanCard
-            title="Lifetime Pro"
-            price="$29"
-            caption="Pay once for current Pro features"
+            title="Annual Pro"
+            price="$20"
+            suffix="/ year"
+            caption="Two months free vs. monthly"
             badge="Best value"
+            highlighted
             features={proFeatures.map((text) => ({ text, included: true }))}
             action={
-              <Button className="w-full" onClick={() => openCheckout(LIFETIME_CHECKOUT_URL, setStatus)}>
-                Buy lifetime
+              <Button variant="primary" className="w-full" onClick={() => openCheckout(ANNUAL_CHECKOUT_URL, setStatus)}>
+                Start annual
                 <ExternalLink size={16} />
               </Button>
             }
-            note="No monthly billing. License key is delivered on the success page or order email."
+            note="Billed once per year (~$1.67 / month). Cancel anytime from the payment provider portal."
           />
         </section>
 
@@ -189,7 +191,7 @@ function Upgrade() {
               <div className="flex flex-wrap gap-2">
                 <PromisePill icon={<ShieldCheck size={14} />} text="Local-first" />
                 <PromisePill icon={<Sparkles size={14} />} text="Future Pro updates" />
-                <PromisePill icon={<InfinityIcon size={14} />} text="Lifetime option" />
+                <PromisePill icon={<CalendarClock size={14} />} text="Cancel anytime" />
               </div>
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -316,7 +318,7 @@ function PlanCard({ title, price, suffix, caption, badge, highlighted, features,
           <p className="mt-1 text-sm text-muted-foreground">{caption}</p>
         </div>
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-app bg-muted text-primary">
-          {title === 'Monthly Pro' ? <CalendarClock size={19} /> : title === 'Lifetime Pro' ? <InfinityIcon size={19} /> : <BadgeDollarSign size={19} />}
+          {title === 'Free' ? <BadgeDollarSign size={19} /> : <CalendarClock size={19} />}
         </div>
       </div>
       <div className="mt-5 flex items-end gap-1">

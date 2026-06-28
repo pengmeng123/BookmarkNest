@@ -105,6 +105,71 @@ describe('saveImportedBookmarks', () => {
     expect(response.data?.session.insertedCount).toBe(1);
   });
 
+  function stubMirrorSetting(mirrorRemovals: boolean) {
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: {
+          get: vi.fn(async (key: string) => ({ [key]: { mirrorRemovals } }))
+        }
+      }
+    });
+  }
+
+  const otherBookmark = {
+    ...bookmark,
+    tweetId: '2',
+    tweetUrl: 'https://x.com/user/status/2',
+    contentText: 'Other content'
+  };
+
+  it('mirror-removes un-bookmarked X items on a complete import when enabled', async () => {
+    await upsertBookmark(bookmark);
+    const stale = await upsertBookmark(otherBookmark);
+    stubMirrorSetting(true);
+
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [bookmark],
+      foundCount: 1,
+      failedCount: 0,
+      mirrorComplete: true
+    });
+
+    expect((await db.bookmarks.get(stale.bookmark.id))?.deleted).toBe(true);
+  });
+
+  it('does not mirror-remove on a partial import even when enabled', async () => {
+    await upsertBookmark(bookmark);
+    const stale = await upsertBookmark(otherBookmark);
+    stubMirrorSetting(true);
+
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [bookmark],
+      foundCount: 1,
+      failedCount: 0,
+      mirrorComplete: false
+    });
+
+    expect((await db.bookmarks.get(stale.bookmark.id))?.deleted).toBe(false);
+  });
+
+  it('does not mirror-remove when the setting is disabled', async () => {
+    await upsertBookmark(bookmark);
+    const stale = await upsertBookmark(otherBookmark);
+    stubMirrorSetting(false);
+
+    await saveImportedBookmarks({
+      sourceUrl: 'https://x.com/i/bookmarks',
+      bookmarks: [bookmark],
+      foundCount: 1,
+      failedCount: 0,
+      mirrorComplete: true
+    });
+
+    expect((await db.bookmarks.get(stale.bookmark.id))?.deleted).toBe(false);
+  });
+
   it('exports sanitized import diagnostics without raw response bodies', async () => {
     const storage: Record<string, unknown> = {
       'bookmarknest:last-x-import-debug': {

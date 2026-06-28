@@ -1,3 +1,4 @@
+import { ChevronsUpDown } from 'lucide-react';
 import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
 
 import { cn } from '../lib/utils/cn';
@@ -32,14 +33,20 @@ export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInput
 
 export function SelectInput({ className, children, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select
-      className={cn(
-        'h-10 w-full rounded-app border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15',
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </select>
+    <div className="relative">
+      <select
+        className={cn(
+          'h-10 w-full appearance-none rounded-app border border-border bg-background pl-3 pr-9 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15',
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </select>
+      <ChevronsUpDown
+        size={16}
+        className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+      />
+    </div>
   );
 }

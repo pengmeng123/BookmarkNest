@@ -1,9 +1,11 @@
+import '../lib/utils/translateGuard';
 import { AlertTriangle, Download, LoaderCircle, Trash2, Upload } from 'lucide-react';
 import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Field, SelectInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
 import { useTheme } from '../hooks/useTheme';
@@ -24,6 +26,7 @@ function Options() {
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [autoSync, setAutoSync] = useState(false);
   const [syncInterval, setSyncInterval] = useState(60);
+  const [mirrorRemovals, setMirrorRemovals] = useState(false);
   const [versionClicks, setVersionClicks] = useState(0);
   const showDiagnostics = versionClicks >= 5;
   const extensionVersion = useMemo(() => {
@@ -37,6 +40,7 @@ function Options() {
     void getSettings().then((s) => {
       setAutoSync(s.autoSync);
       setSyncInterval(s.syncIntervalMinutes);
+      setMirrorRemovals(s.mirrorRemovals);
     });
   }, []);
 
@@ -180,6 +184,29 @@ function Options() {
           </div>
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
+          <h2 className="text-sm font-semibold">Mirror removals</h2>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Keep BookmarkNest in lockstep with X. When you un-bookmark a post on X, a full import (manual or
+            auto-sync) moves it to Trash here too. Off by default.
+          </p>
+          <label className="mt-3 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={mirrorRemovals}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setMirrorRemovals(next);
+                void saveSettings({ mirrorRemovals: next });
+              }}
+              className="h-4 w-4 rounded border-border accent-primary"
+            />
+            Remove posts I un-bookmarked on X
+          </label>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Only acts on complete imports, never on partial or cancelled ones. Removals are recoverable from Trash.
+          </p>
+        </div>
+        <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>
           <p className="mt-2 text-sm text-muted-foreground">Export, restore, or clear the local BookmarkNest library.</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -272,6 +299,8 @@ function Options() {
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <Options />
+    <ErrorBoundary>
+      <Options />
+    </ErrorBoundary>
   </StrictMode>
 );

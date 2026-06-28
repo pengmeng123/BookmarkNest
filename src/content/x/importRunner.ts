@@ -18,6 +18,10 @@ export interface AutoScrollOptions {
   waitMs?: number;
   scrollBy?: number;
   apiBookmarks?: () => BookmarkInput[];
+  // True only when `apiBookmarks` is the complete, authoritative X set (every
+  // page fetched). Forwarded to the save payload so the background can mirror
+  // removals. Never set on DOM-parsed / visible imports.
+  complete?: boolean;
 }
 
 export interface AutoScrollProgress {
@@ -133,14 +137,15 @@ async function saveCollectedBookmarks(sourceUrl: string, collected: Map<string, 
   return saveBookmarkInputs(sourceUrl, Array.from(collected.values()).map((card) => card.input), collected.size + failedCount, failedCount);
 }
 
-async function saveBookmarkInputs(sourceUrl: string, bookmarks: BookmarkInput[], foundCount: number, failedCount: number) {
+async function saveBookmarkInputs(sourceUrl: string, bookmarks: BookmarkInput[], foundCount: number, failedCount: number, complete = false) {
   const response = await chrome.runtime.sendMessage({
     type: 'SAVE_IMPORTED_BOOKMARKS',
     payload: {
       sourceUrl,
       bookmarks,
       foundCount,
-      failedCount
+      failedCount,
+      mirrorComplete: complete
     }
   });
   const saveResponse = response as MessageResponse<ImportRunResult>;
@@ -284,7 +289,7 @@ export async function runImportWithAutoScroll(
 
   const apiBookmarks = options.apiBookmarks?.() ?? [];
   if (apiBookmarks.length > 0) {
-    return saveBookmarkInputs(sourceUrl, apiBookmarks, apiBookmarks.length, 0);
+    return saveBookmarkInputs(sourceUrl, apiBookmarks, apiBookmarks.length, 0, options.complete ?? false);
   }
 
   return saveCollectedBookmarks(sourceUrl, collected, failedCount);

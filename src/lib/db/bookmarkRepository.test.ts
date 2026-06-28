@@ -18,6 +18,7 @@ import {
   restoreFolder,
   restoreTag,
   softDeleteBookmark,
+  softDeleteMissingXBookmarks,
   setBookmarkArchived,
   upsertBookmark
 } from './bookmarkRepository';
@@ -92,6 +93,21 @@ describe('bookmarkRepository', () => {
     const stored = await db.bookmarks.get(inserted.bookmark.id);
     expect(stored?.deleted).toBe(true);
     expect(stored?.deletedAt).toEqual(expect.any(Number));
+  });
+
+  it('mirror-removes X bookmarks missing from the present set, sparing others', async () => {
+    const kept = await upsertBookmark(bookmarkInput(1));
+    const removed = await upsertBookmark(bookmarkInput(2));
+    const manual = await upsertBookmark({ ...bookmarkInput(3), source: 'manual-import' as const });
+
+    const presentKeys = new Set([createDedupeKey(bookmarkInput(1))]);
+    const count = await softDeleteMissingXBookmarks(presentKeys);
+
+    expect(count).toBe(1);
+    expect((await db.bookmarks.get(removed.bookmark.id))?.deleted).toBe(true);
+    expect((await db.bookmarks.get(kept.bookmark.id))?.deleted).toBe(false);
+    // Manually imported bookmarks are never touched by X mirror-removal.
+    expect((await db.bookmarks.get(manual.bookmark.id))?.deleted).toBe(false);
   });
 
   it('moves bookmarks to uncategorized when deleting a folder', async () => {

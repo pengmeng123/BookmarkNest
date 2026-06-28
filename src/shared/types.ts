@@ -61,6 +61,10 @@ export interface ImportPayload {
   bookmarks: BookmarkInput[];
   foundCount: number;
   failedCount: number;
+  // True only when `bookmarks` is the complete, authoritative X bookmark set
+  // (full pagination reached its natural end). Required before mirror-removal
+  // may soft-delete local bookmarks missing from the set.
+  mirrorComplete?: boolean;
 }
 
 export type ThemePreference = 'light' | 'dark' | 'system';
@@ -72,6 +76,9 @@ export interface Settings {
   language: 'en';
   autoSync: boolean;
   syncIntervalMinutes: number;
+  // When true, a complete import soft-deletes local X bookmarks that are no
+  // longer present on x.com (i.e. were un-bookmarked there). Default off.
+  mirrorRemovals: boolean;
 }
 
 export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';
@@ -91,6 +98,7 @@ export type ExtensionMessage =
   | { type: 'OPEN_APP' }
   | { type: 'OPEN_UPGRADE' }
   | { type: 'START_X_IMPORT'; mode?: 'visible' | 'auto-scroll' }
+  | { type: 'RUN_X_API_IMPORT' }
   | { type: 'GET_IMPORT_DIAGNOSTICS' }
   | { type: 'CAPTURE_X_BOOKMARKS_REQUEST'; payload: CapturedBookmarksRequest }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }

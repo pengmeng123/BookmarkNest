@@ -1,5 +1,5 @@
 import { EXTENSION_PAGES } from '../shared/constants';
-import { upsertBookmark } from '../lib/db/bookmarkRepository';
+import { createDedupeKey, softDeleteMissingXBookmarks, upsertBookmark } from '../lib/db/bookmarkRepository';
 import { db } from '../lib/db/database';
 import { parseGraphqlBookmarks } from '../content/x/graphqlParser';
 import { findBottomCursor } from '../content/x/graphqlCursor';
@@ -611,6 +611,11 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
   let lastResponseBody: unknown = null;
   let page = 0;
   let fetchError: string | null = null;
+  // True only when pagination stops because X has no further pages — i.e. the
+  // fetched set is the complete, authoritative bookmark list. Stays false if we
+  // bail out on the page cap, an error, or an empty body, so mirror-removal
+  // never runs against a truncated set.
+  let reachedEnd = false;
 
   while (page < 120) {
     page += 1;
@@ -663,6 +668,7 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
 
     const bottomCursor = findBottomCursor(body);
     if (!bottomCursor || bottomCursor === cursor || seenCursors.has(bottomCursor)) {
+      reachedEnd = true;
       break;
     }
 
@@ -708,7 +714,8 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
     sourceUrl: 'https://x.com/i/bookmarks',
     bookmarks: enrichedBookmarks,
     foundCount: enrichedBookmarks.length,
-    failedCount: 0
+    failedCount: 0,
+    mirrorComplete: reachedEnd && !fetchError
   });
   await saveImportDebugSnapshot({ ...diagnostics, session: response.data?.session });
   return response;
@@ -792,6 +799,21 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
   session.finishedAt = Date.now();
   await db.importSessions.put(session);
 
+  // Mirror-removal: when the import represents the complete, authoritative X
+  // bookmark set and the user has opted in, soft-delete local X bookmarks that
+  // are no longer present (un-bookmarked on x.com). Never runs on partial sets.
+  if (payload.mirrorComplete && session.status !== 'failed') {
+    try {
+      const settings = await getSettings();
+      if (settings.mirrorRemovals) {
+        const presentKeys = new Set(payload.bookmarks.map((bookmark) => createDedupeKey(bookmark)));
+        await softDeleteMissingXBookmarks(presentKeys);
+      }
+    } catch {
+      // Removal mirroring is best-effort; never fail the import over it.
+    }
+  }
+
   return { ok: true, data: { session } };
 }
 
@@ -822,6 +844,11 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
     if (message.type === 'START_X_IMPORT') {
       sendStartImportToActiveTab(message.mode).then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    if (message.type === 'RUN_X_API_IMPORT') {
+      importBookmarksFromCapturedApi().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 

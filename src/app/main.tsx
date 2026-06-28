@@ -1,10 +1,11 @@
+import '../lib/utils/translateGuard';
 import {
   Archive,
+  ChevronsUpDown,
   Download,
   FileJson,
   FileSpreadsheet,
   Folder,
-  History,
   Inbox,
   LoaderCircle,
   Moon,
@@ -12,6 +13,7 @@ import {
   Pencil,
   Plus,
   Search,
+  Settings,
   Sun,
   Tags,
   Trash2,
@@ -23,6 +25,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Field, SelectInput, TextInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
 import { useTheme } from '../hooks/useTheme';
@@ -82,50 +85,6 @@ function formatImportError(error?: string) {
   }
 
   return error;
-}
-
-function formatShortDate(timestamp?: number) {
-  if (!timestamp) {
-    return 'Running';
-  }
-
-  return new Intl.DateTimeFormat('en', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(timestamp);
-}
-
-function ImportHistory({ sessions }: { sessions: ImportSession[] }) {
-  if (!sessions.length) {
-    return null;
-  }
-
-  return (
-    <div className="mt-4 rounded-app border border-border bg-surface p-3 shadow-sm">
-      <div className="flex items-center gap-2 px-1">
-        <History size={15} className="text-muted-foreground" />
-        <h2 className="text-sm font-semibold">Recent imports</h2>
-      </div>
-      <div className="mt-3 space-y-2">
-        {sessions.slice(0, 4).map((session) => (
-          <div key={session.id} className="rounded-app border border-border bg-background px-3 py-2 text-xs">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-medium capitalize text-foreground">{session.status}</span>
-              <span className="text-muted-foreground">{formatShortDate(session.finishedAt ?? session.startedAt)}</span>
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-muted-foreground">
-              <span>{session.insertedCount} new</span>
-              <span>{session.duplicateCount} duplicate</span>
-              <span>{session.failedCount} failed</span>
-              <span>{session.foundCount} found</span>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function AppSidebar({
@@ -770,7 +729,11 @@ function App() {
       return;
     }
 
-    await downloadBookmarks(format, bookmarks);
+    try {
+      await downloadBookmarks(format, bookmarks);
+    } catch (error) {
+      setImportStatus({ type: 'error', message: error instanceof Error ? error.message : 'Export failed. Please try again.' });
+    }
   }
 
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
@@ -932,16 +895,25 @@ function App() {
       title="BookmarkNest"
       description="Import the X bookmarks already loaded in your browser, then organize and export them locally."
       actions={
-        <button
-          className="grid h-9 w-9 place-items-center rounded-app border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
-          aria-label="Toggle theme"
-          onClick={() => {
-            const next = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
-            void setTheme(next);
-          }}
-        >
-          {theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            className="grid h-9 w-9 place-items-center rounded-app border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            aria-label="Toggle theme"
+            onClick={() => {
+              const next = theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system';
+              void setTheme(next);
+            }}
+          >
+            {theme === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
+          </button>
+          <button
+            className="grid h-9 w-9 place-items-center rounded-app border border-border bg-background text-muted-foreground transition hover:bg-muted hover:text-foreground"
+            aria-label="Settings"
+            onClick={() => void chrome.runtime?.openOptionsPage?.()}
+          >
+            <Settings size={16} />
+          </button>
+        </div>
       }
     >
       <section className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
@@ -961,9 +933,6 @@ function App() {
           onDeleteFolder={(nextFolderId) => void handleDeleteFolder(nextFolderId)}
           onDeleteTag={(nextTagId) => void handleDeleteTag(nextTagId)}
         />
-        <div className="lg:hidden">
-          <ImportHistory sessions={library.importSessions} />
-        </div>
         <div className="overflow-hidden rounded-app border border-border bg-surface shadow-sm">
           <div className="border-b border-border bg-surface p-4">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -983,32 +952,38 @@ function App() {
                   </button>
                 ) : null}
               </label>
-              <select
-                className="h-11 rounded-app border border-border bg-background px-3 text-sm text-foreground shadow-inner outline-none"
-                value={sortKey}
-                onChange={(e) => setSortKey(e.target.value as SortKey)}
-                aria-label="Sort bookmarks"
-              >
-                <option value="source">Source order</option>
-                <option value="date-posted">Date posted</option>
-                <option value="date-imported">Date imported</option>
-                <option value="author">Author</option>
-              </select>
+              <div className="relative w-44 shrink-0">
+                <select
+                  className="h-11 w-full appearance-none rounded-app border border-border bg-background pl-3 pr-9 text-sm text-foreground shadow-inner outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  value={sortKey}
+                  onChange={(e) => setSortKey(e.target.value as SortKey)}
+                  aria-label="Sort bookmarks"
+                >
+                  <option value="source">Source order</option>
+                  <option value="date-posted">Date posted</option>
+                  <option value="date-imported">Date imported</option>
+                  <option value="author">Author</option>
+                </select>
+                <ChevronsUpDown
+                  size={16}
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                />
+              </div>
               <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="primary" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
+                  <Button variant="primary" className="h-11 px-4" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
                     {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                     {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                   </Button>
-                <div className="flex rounded-app border border-border bg-background p-1">
-                  <Button size="xs" variant="ghost" onClick={() => void handleExport('json')} disabled={searchMatches.length === 0}>
+                <div className="flex h-11 items-center rounded-app border border-border bg-background p-1">
+                  <Button size="sm" variant="ghost" onClick={() => void handleExport('json')} disabled={searchMatches.length === 0}>
                     <FileJson size={14} />
                     JSON
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => void handleExport('markdown')} disabled={searchMatches.length === 0}>
+                  <Button size="sm" variant="ghost" onClick={() => void handleExport('markdown')} disabled={searchMatches.length === 0}>
                     <Download size={14} />
                     MD
                   </Button>
-                  <Button size="xs" variant="ghost" onClick={() => void handleExport('csv')} disabled={searchMatches.length === 0}>
+                  <Button size="sm" variant="ghost" onClick={() => void handleExport('csv')} disabled={searchMatches.length === 0}>
                     <FileSpreadsheet size={14} />
                     CSV
                   </Button>
@@ -1125,9 +1100,6 @@ function App() {
           </button>
         </div>
       ) : null}
-      <div className="hidden lg:fixed lg:bottom-4 lg:left-4 lg:block lg:w-[280px]">
-        <ImportHistory sessions={library.importSessions} />
-      </div>
       <Dialog open={showShortcuts} title="Keyboard shortcuts" onClose={() => setShowShortcuts(false)}>
         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
           {([
@@ -1152,6 +1124,8 @@ function App() {
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>
 );

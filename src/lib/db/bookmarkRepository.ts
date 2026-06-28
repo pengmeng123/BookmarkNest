@@ -134,6 +134,31 @@ export async function softDeleteBookmark(bookmarkId: string) {
   });
 }
 
+// Mirror-removal: after a *complete* X import, soft-delete the X-sourced
+// bookmarks that are no longer present on x.com (i.e. were un-bookmarked
+// there). `presentKeys` holds the `dedupeKey` of every bookmark in the
+// authoritative imported set — anything X-sourced not in it is removed.
+// Only ever called when the caller has confirmed the import was complete,
+// since a truncated set would otherwise wipe the library. Returns the count.
+export async function softDeleteMissingXBookmarks(presentKeys: Set<string>): Promise<number> {
+  let removed = 0;
+  await db.transaction('rw', db.bookmarks, db.tags, async () => {
+    const now = Date.now();
+    const removedTagIds = new Set<string>();
+    await db.bookmarks
+      .filter((bookmark) => bookmark.source === 'x-bookmarks-page' && !bookmark.deleted && !presentKeys.has(bookmark.dedupeKey))
+      .modify((bookmark) => {
+        bookmark.deleted = true;
+        bookmark.deletedAt = now;
+        bookmark.updatedAt = now;
+        bookmark.tagIds.forEach((tagId) => removedTagIds.add(tagId));
+        removed += 1;
+      });
+    await recalculateTagUsage(Array.from(removedTagIds));
+  });
+  return removed;
+}
+
 export async function restoreBookmarks(bookmarkIds: string[]) {
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
     const restoredTagIds = new Set<string>();

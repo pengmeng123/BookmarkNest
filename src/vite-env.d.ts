@@ -4,7 +4,7 @@ interface ImportMetaEnv {
   readonly VITE_LICENSE_WORKER_URL?: string;
   readonly VITE_CREEM_CHECKOUT_URL?: string;
   readonly VITE_CREEM_MONTHLY_CHECKOUT_URL?: string;
-  readonly VITE_CREEM_LIFETIME_CHECKOUT_URL?: string;
+  readonly VITE_CREEM_ANNUAL_CHECKOUT_URL?: string;
   readonly VITE_SUPPORT_EMAIL?: string;
 }
 
