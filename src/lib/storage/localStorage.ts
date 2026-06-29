@@ -1,7 +1,8 @@
-import type { LicenseData, Settings } from '../../shared/types';
+import type { LastSyncStatus, LicenseData, Settings } from '../../shared/types';
 
 const SETTINGS_KEY = 'settings';
 const LICENSE_KEY = 'license';
+const LAST_SYNC_STATUS_KEY = 'bookmarknest:last-sync-status';
 
 export const defaultSettings: Settings = {
   theme: 'system',
@@ -56,4 +57,21 @@ export async function saveLicenseData(license: LicenseData) {
 
 export async function clearLicenseData() {
   await chrome.storage.local.set({ [LICENSE_KEY]: emptyLicenseData });
+}
+
+export async function getLastSyncStatus(): Promise<LastSyncStatus | null> {
+  if (!hasChromeStorage()) {
+    return null;
+  }
+
+  const result = await chrome.storage.local.get(LAST_SYNC_STATUS_KEY);
+  return (result[LAST_SYNC_STATUS_KEY] as LastSyncStatus | undefined) ?? null;
+}
+
+export async function setLastSyncStatus(status: LastSyncStatus) {
+  if (!hasChromeStorage()) {
+    return;
+  }
+
+  await chrome.storage.local.set({ [LAST_SYNC_STATUS_KEY]: status });
 }

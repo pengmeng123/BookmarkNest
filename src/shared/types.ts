@@ -83,7 +83,16 @@ export interface Settings {
 
 export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';
 
-export interface LicenseData {
+// Outcome of the most recent X sync (auto or manual API import). Persisted so
+// the popup can surface silent background failures instead of just going stale.
+export interface LastSyncStatus {
+  at: number;
+  ok: boolean;
+  inserted?: number;
+  removed?: number;
+  found?: number;
+  error?: string;
+}export interface LicenseData {
   pro: boolean;
   licenseKey: string;
   instanceId: string;

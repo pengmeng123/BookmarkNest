@@ -3,8 +3,8 @@ import { createDedupeKey, softDeleteMissingXBookmarks, upsertBookmark } from '..
 import { db } from '../lib/db/database';
 import { parseGraphqlBookmarks } from '../content/x/graphqlParser';
 import { findBottomCursor } from '../content/x/graphqlCursor';
-import { getSettings } from '../lib/storage/localStorage';
-import type { CapturedBookmarksRequest, ExtensionMessage, ImportDiagnostics, ImportPayload, ImportSession, MessageResponse } from '../shared/types';
+import { getSettings, setLastSyncStatus } from '../lib/storage/localStorage';
+import type { CapturedBookmarksRequest, ExtensionMessage, ImportDiagnostics, ImportPayload, ImportSession, MessageResponse, Settings } from '../shared/types';
 
 let capturedBookmarksRequest: CapturedBookmarksRequest | null = null;
 const X_BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
@@ -13,11 +13,21 @@ const LAST_IMPORT_DEBUG_KEY = 'bookmarknest:last-x-import-debug';
 const BOOKMARKS_GRAPHQL_PATTERN = /\/i\/api\/graphql\/([^/]+)\/Bookmarks\b/;
 const SYNC_ALARM_NAME = 'bookmarknest-auto-sync';
 
-async function updateSyncAlarm() {
+async function updateSyncAlarm({ forceReset = false }: { forceReset?: boolean } = {}) {
   if (!chrome.alarms) return;
   const settings = await getSettings();
   if (settings.autoSync && settings.syncIntervalMinutes > 0) {
-    await chrome.alarms.create(SYNC_ALARM_NAME, { periodInMinutes: settings.syncIntervalMinutes });
+    // Preserve an existing schedule across service-worker restarts; only (re)create
+    // when there is no alarm yet, or when the sync settings actually changed. The
+    // 1-minute delay gives users a first sync shortly after enabling instead of
+    // waiting a full interval.
+    const existing = await chrome.alarms.get(SYNC_ALARM_NAME);
+    if (forceReset || !existing) {
+      await chrome.alarms.create(SYNC_ALARM_NAME, {
+        delayInMinutes: 1,
+        periodInMinutes: settings.syncIntervalMinutes
+      });
+    }
   } else {
     await chrome.alarms.clear(SYNC_ALARM_NAME);
   }
@@ -597,7 +607,27 @@ async function primeCapturedBookmarksRequest() {
   return waitForCapturedBookmarksRequest();
 }
 
-async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ session: ImportSession }>> {
+// Records the outcome of every captured-API sync (auto or manual) so the popup
+// can show "last sync" and, crucially, surface otherwise-silent failures.
+async function recordSyncStatus(response: MessageResponse<{ session: ImportSession; removedCount?: number }>) {
+  const session = response.data?.session;
+  await setLastSyncStatus({
+    at: Date.now(),
+    ok: response.ok,
+    inserted: session?.insertedCount,
+    removed: response.data?.removedCount,
+    found: session?.foundCount,
+    error: response.ok ? undefined : response.error
+  });
+}
+
+async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ session: ImportSession; removedCount?: number }>> {
+  const response = await runCapturedApiImport();
+  await recordSyncStatus(response);
+  return response;
+}
+
+async function runCapturedApiImport(): Promise<MessageResponse<{ session: ImportSession; removedCount?: number }>> {
   const requestTemplate = await ensureBookmarksRequestTemplate();
   if (!requestTemplate) {
     return { ok: false, error: 'No captured X Bookmarks API request. Open x.com/i/bookmarks, refresh it, then try Import more again.' };
@@ -765,7 +795,7 @@ function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
 
-export async function saveImportedBookmarks(payload: ImportPayload): Promise<MessageResponse<{ session: ImportSession }>> {
+export async function saveImportedBookmarks(payload: ImportPayload): Promise<MessageResponse<{ session: ImportSession; removedCount?: number }>> {
   const now = Date.now();
   const session: ImportSession = {
     id: createId('import'),
@@ -802,19 +832,20 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
   // Mirror-removal: when the import represents the complete, authoritative X
   // bookmark set and the user has opted in, soft-delete local X bookmarks that
   // are no longer present (un-bookmarked on x.com). Never runs on partial sets.
+  let removedCount = 0;
   if (payload.mirrorComplete && session.status !== 'failed') {
     try {
       const settings = await getSettings();
       if (settings.mirrorRemovals) {
         const presentKeys = new Set(payload.bookmarks.map((bookmark) => createDedupeKey(bookmark)));
-        await softDeleteMissingXBookmarks(presentKeys);
+        removedCount = await softDeleteMissingXBookmarks(presentKeys);
       }
     } catch {
       // Removal mirroring is best-effort; never fail the import over it.
     }
   }
 
-  return { ok: true, data: { session } };
+  return { ok: true, data: { session, removedCount } };
 }
 
 if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
@@ -887,7 +918,12 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
   chrome.storage?.onChanged?.addListener((changes, area) => {
     if (area === 'local' && changes.settings) {
-      void updateSyncAlarm();
+      const previous = changes.settings.oldValue as Partial<Settings> | undefined;
+      const next = changes.settings.newValue as Partial<Settings> | undefined;
+      const syncChanged =
+        previous?.autoSync !== next?.autoSync ||
+        previous?.syncIntervalMinutes !== next?.syncIntervalMinutes;
+      void updateSyncAlarm({ forceReset: syncChanged });
     }
   });
 

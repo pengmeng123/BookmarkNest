@@ -8,12 +8,14 @@ import {
   Folder,
   Inbox,
   LoaderCircle,
+  Lock,
   Moon,
   MoreHorizontal,
   Pencil,
   Plus,
   Search,
   Settings,
+  Sparkles,
   Sun,
   Tags,
   Trash2,
@@ -974,19 +976,35 @@ function App() {
                     {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                     {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                   </Button>
-                <div className="flex h-11 items-center rounded-app border border-border bg-background p-1">
+                <div className="flex h-11 items-center gap-1 rounded-app border border-border bg-background p-1">
                   <Button size="sm" variant="ghost" onClick={() => void handleExport('json')} disabled={searchMatches.length === 0}>
                     <FileJson size={14} />
                     JSON
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void handleExport('markdown')} disabled={searchMatches.length === 0}>
-                    <Download size={14} />
-                    MD
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void handleExport('csv')} disabled={searchMatches.length === 0}>
-                    <FileSpreadsheet size={14} />
-                    CSV
-                  </Button>
+                  {isPro ? (
+                    <>
+                      <Button size="sm" variant="ghost" onClick={() => void handleExport('markdown')} disabled={searchMatches.length === 0}>
+                        <Download size={14} />
+                        MD
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => void handleExport('csv')} disabled={searchMatches.length === 0}>
+                        <FileSpreadsheet size={14} />
+                        CSV
+                      </Button>
+                    </>
+                  ) : (
+                    <button
+                      className="group inline-flex h-8 items-center gap-2 rounded-app border border-primary/15 bg-primary/[0.07] px-2.5 text-xs font-medium text-primary transition hover:border-primary/25 hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                      onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}
+                      disabled={searchMatches.length === 0}
+                      title="Unlock Markdown and CSV exports with Pro"
+                    >
+                      <Lock size={13} />
+                      <span>Pro exports</span>
+                      <span className="rounded-md bg-surface px-1.5 py-0.5 text-[11px] text-muted-foreground shadow-sm ring-1 ring-border/70">MD</span>
+                      <span className="rounded-md bg-surface px-1.5 py-0.5 text-[11px] text-muted-foreground shadow-sm ring-1 ring-border/70">CSV</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -1008,36 +1026,49 @@ function App() {
               </button>
             </div>
           ) : null}
-          <div className="flex flex-wrap items-center gap-2 border-b border-border bg-muted/60 px-4 py-3 text-sm">
-            <span className="font-medium">{selectedIds.size} selected</span>
-            <span className="text-muted-foreground">{selectableCount} visible</span>
-            <Button size="sm" onClick={handleSelectAllVisible} disabled={selectableCount === 0}>
-              Select all visible
-            </Button>
-            <Button size="sm" onClick={handleInvertVisibleSelection} disabled={selectableCount === 0}>
-              Invert visible
-            </Button>
-            <Button size="sm" variant="ghost" onClick={handleClearSelection} disabled={selectedIds.size === 0}>
-              Clear
-            </Button>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-muted/60 px-4 py-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{selectedIds.size} selected</span>
+              <span className="text-muted-foreground">{selectableCount} visible</span>
+              <Button size="sm" onClick={handleSelectAllVisible} disabled={selectableCount === 0}>
+                Select all visible
+              </Button>
+              <Button size="sm" onClick={handleInvertVisibleSelection} disabled={selectableCount === 0}>
+                Invert visible
+              </Button>
+              <Button size="sm" variant="ghost" onClick={handleClearSelection} disabled={selectedIds.size === 0}>
+                Clear
+              </Button>
+            </div>
             {selectedIds.size > 0 ? (
-              <>
-                {!isPro ? <span className="text-muted-foreground">Bulk actions are a Pro feature.</span> : null}
-              <Button size="sm" onClick={() => void handleBulkTag()} disabled={!isPro}>
-                Add tag
-              </Button>
-              <Button size="sm" onClick={() => void handleBulkMove()} disabled={!isPro}>
-                Move
-              </Button>
-              <Button size="sm" variant="danger" onClick={() => void handleBulkDelete()} disabled={!isPro}>
-                Delete
-              </Button>
-              {!isPro ? (
-                <Button size="sm" variant="primary" onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}>
-                  Upgrade
+              <div className="flex flex-wrap items-center gap-2">
+                {!isPro ? (
+                  <button
+                    className="group inline-flex min-h-8 flex-wrap items-center gap-2 rounded-app border border-primary/15 bg-surface px-2.5 py-1 text-xs font-medium text-foreground shadow-sm transition hover:border-primary/30 hover:bg-primary/5"
+                    onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}
+                    title="Unlock bulk tagging, moving, and deleting with Pro"
+                  >
+                    <span className="grid h-5 w-5 place-items-center rounded-md bg-accent/20 text-accent">
+                      <Sparkles size={13} />
+                    </span>
+                    <span className="text-muted-foreground">Pro unlocks</span>
+                    <span>Tag</span>
+                    <span className="text-muted-foreground">/</span>
+                    <span>Move</span>
+                    <span className="text-muted-foreground">/</span>
+                    <span>Delete</span>
+                  </button>
+                ) : null}
+                <Button size="sm" onClick={() => void handleBulkTag()} disabled={!isPro}>
+                  Add tag
                 </Button>
-              ) : null}
-              </>
+                <Button size="sm" onClick={() => void handleBulkMove()} disabled={!isPro}>
+                  Move
+                </Button>
+                <Button size="sm" variant="danger" onClick={() => void handleBulkDelete()} disabled={!isPro}>
+                  Delete
+                </Button>
+              </div>
             ) : null}
           </div>
           <BookmarkList

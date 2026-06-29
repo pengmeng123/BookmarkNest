@@ -8,7 +8,8 @@ import { Button } from '../components/Button';
 import { useTheme } from '../hooks/useTheme';
 import { getBookmarkCounts } from '../lib/db/bookmarkRepository';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import type { ImportSession } from '../shared/types';
+import { getLastSyncStatus } from '../lib/storage/localStorage';
+import type { ImportSession, LastSyncStatus } from '../shared/types';
 import '../styles/globals.css';
 
 function formatImportError(error?: string) {
@@ -23,14 +24,37 @@ function formatImportError(error?: string) {
   return error;
 }
 
+function formatSyncTime(at: number) {
+  const minutes = Math.round((Date.now() - at) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
+function describeLastSync(sync: LastSyncStatus) {
+  if (!sync.ok) {
+    return `Last sync failed (${formatSyncTime(sync.at)}): ${formatImportError(sync.error)}`;
+  }
+
+  const parts = [`${sync.inserted ?? 0} new`];
+  if (sync.removed) {
+    parts.push(`${sync.removed} removed`);
+  }
+  return `Last sync ${formatSyncTime(sync.at)}: ${parts.join(', ')}`;
+}
+
 function Popup() {
   useTheme();
   const [status, setStatus] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [lastSync, setLastSync] = useState<LastSyncStatus | null>(null);
 
   useEffect(() => {
     void getBookmarkCounts().then((c) => setTotalCount(c.total));
+    void getLastSyncStatus().then(setLastSync);
     void chrome.action?.setBadgeText?.({ text: '' });
   }, []);
 
@@ -59,6 +83,7 @@ function Popup() {
           : 'Import started.'
       );
       void getBookmarkCounts().then((c) => setTotalCount(c.total));
+      void getLastSyncStatus().then(setLastSync);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Import failed. Please try again.');
     } finally {
@@ -92,6 +117,9 @@ function Popup() {
         </Button>
       </div>
       {status ? <p className="mt-3 text-xs text-muted-foreground">{status}</p> : null}
+      {!status && lastSync ? (
+        <p className={`mt-3 text-xs ${lastSync.ok ? 'text-muted-foreground' : 'text-danger'}`}>{describeLastSync(lastSync)}</p>
+      ) : null}
     </main>
   );
 }

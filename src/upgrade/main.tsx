@@ -16,8 +16,8 @@ const ANNUAL_CHECKOUT_URL = (import.meta.env.VITE_CREEM_ANNUAL_CHECKOUT_URL ?? i
 const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) ?? 'pp12111@outlook.com';
 
 const freeFeatures = [
-  { text: 'Import and search your recent 200 local bookmarks', included: true },
-  { text: 'Organize with folders and tags', included: true },
+  { text: 'Search and read your full bookmark library', included: true },
+  { text: 'Organize up to 200 bookmarks with folders & tags', included: true },
   { text: 'Export JSON backups', included: true },
   { text: 'Markdown and CSV exports', included: false },
   { text: 'Bulk actions across the full library', included: false }

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Archive, Check, ExternalLink, FolderInput, Link, Tag, Trash2 } from 'lucide-react';
+import { Archive, Check, ExternalLink, FolderInput, Link, Lock, Tag, Trash2 } from 'lucide-react';
 
 import { Button } from '../../components/Button';
 import { cn } from '../../lib/utils/cn';
+import { sendRuntimeMessage } from '../../lib/messaging/runtime';
 import type { BookmarkListItem } from '../../lib/db/bookmarkRepository';
 
 interface BookmarkCardProps {
@@ -122,7 +123,15 @@ export function BookmarkCard({
                 <h3 className="truncate text-sm font-semibold">{bookmark.authorName}</h3>
                 <span className="text-xs text-muted-foreground">@{bookmark.authorHandle}</span>
                 {bookmark.locked ? (
-                  <span className="rounded-app border border-border bg-muted px-2 py-0.5 text-xs text-muted-foreground">Locked</span>
+                  <button
+                    type="button"
+                    onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}
+                    className="inline-flex items-center gap-1 rounded-app border border-primary/30 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition hover:bg-primary/20"
+                    title="This bookmark is beyond the free 200-bookmark limit. Upgrade to Pro to manage it."
+                  >
+                    <Lock size={11} />
+                    Upgrade to manage
+                  </button>
                 ) : null}
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
