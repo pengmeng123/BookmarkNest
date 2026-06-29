@@ -2,10 +2,10 @@ import type { ManifestV3Export } from '@crxjs/vite-plugin';
 
 export const manifest: ManifestV3Export = {
   manifest_version: 3,
-  name: 'X Bookmark Manager - Search, Tags & Export',
+  name: 'Bookmark Manager for X — Search, Tags & Export · BookmarkNest',
   short_name: 'BookmarkNest',
-  description: 'Search, organize, and export your X bookmarks.',
-  version: '0.1.0',
+  description: 'Save, search, tag & export your X (Twitter) bookmarks. Local-first bookmark manager with folders, CSV/Markdown export & auto-sync.',
+  version: '1.0.0',
   action: {
     default_title: 'BookmarkNest',
     default_popup: 'src/popup/index.html'
