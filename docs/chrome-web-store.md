@@ -2,7 +2,7 @@
 
 ## Permission Explanation
 
-BookmarkNest requests the minimum permissions needed for the MVP:
+BookmarkNest requests permissions needed for local storage, user-triggered X bookmark import, optional background auto-sync, and local exports:
 
 - `storage`: store settings and license status in Chrome local storage.
 - `downloads`: download JSON, Markdown, and CSV exports created locally.
@@ -10,9 +10,10 @@ BookmarkNest requests the minimum permissions needed for the MVP:
 - `webRequest`: detect the X Bookmarks GraphQL request shape after the user opens X bookmarks so imports can follow X's current API format.
 - `declarativeNetRequest` and `declarativeNetRequestWithHostAccess`: set the request headers required for extension-initiated X GraphQL requests.
 - `cookies`: read the X CSRF cookie needed to make authenticated X bookmark requests in the user's existing X session.
+- `alarms`: run optional background auto-sync at the interval selected by the user.
 - `https://x.com/*` and `https://twitter.com/*`: detect the user's X/Twitter bookmarks page, import bookmarks after user action, and scan the rendered bookmarks page for metadata such as avatars.
 
-BookmarkNest does not request `<all_urls>`, `activeTab`, or `scripting` in the MVP.
+BookmarkNest does not request `<all_urls>`, `activeTab`, or `scripting`.
 
 ## Store Copy Guardrails
 
@@ -21,7 +22,7 @@ BookmarkNest does not request `<all_urls>`, `activeTab`, or `scripting` in the M
 - State that bookmark content stays local by default.
 - State that License activation sends license/device data to the license service.
 - State that import diagnostics contain counters and technical errors, not bookmark text.
-- Describe Pro pricing as either $1/month or $29 lifetime, depending on the selected checkout option.
+- Describe Pro pricing as $2.99/month or $24.99/year before taxes; checkout displays any applicable taxes.
 
 ## Short Description
 
@@ -39,6 +40,6 @@ Core features:
 - Archive or delete local bookmark records.
 - Export JSON backups on Free.
 - Unlock unlimited management plus Markdown and CSV exports with Pro.
-- Choose Monthly Pro for $1/month or Lifetime Pro for $29 one-time.
+- Choose Monthly Pro for $2.99/month or Annual Pro for $24.99/year. Taxes may apply at checkout.
 
 Bookmark content is stored locally in your browser by default. The extension does not upload bookmark text, authors, tags, folders, or media URLs to a server.

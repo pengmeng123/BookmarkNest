@@ -153,7 +153,7 @@ function Upgrade() {
           />
           <PlanCard
             title="Monthly Pro"
-            price="$2"
+            price="$2.99"
             suffix="/ month"
             caption="Low-cost access for active X users"
             badge={license.pro ? 'Pro enabled' : 'Most flexible'}
@@ -168,7 +168,7 @@ function Upgrade() {
           />
           <PlanCard
             title="Annual Pro"
-            price="$20"
+            price="$24.99"
             suffix="/ year"
             caption="Two months free vs. monthly"
             badge="Best value"
@@ -180,7 +180,7 @@ function Upgrade() {
                 <ExternalLink size={16} />
               </Button>
             }
-            note="Billed once per year (~$1.67 / month). Cancel anytime from the payment provider portal."
+            note="Billed once per year. Cancel anytime from the payment provider portal."
           />
         </section>
 

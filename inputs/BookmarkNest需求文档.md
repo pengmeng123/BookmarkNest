@@ -4,7 +4,7 @@
 
 BookmarkNest 是项目内部代号，插件对外名称建议使用更利于 Chrome Web Store 搜索的关键词型名称：X Bookmark Manager。它是一款面向 X/Twitter 重度用户的 Chrome 插件，帮助用户把分散、难搜索、难整理的 X 书签变成一个本地优先的知识库。产品核心卖点是：搜索 X 书签、按文件夹/标签整理、批量管理、导出到常见格式。
 
-插件优先上架 Chrome Web Store，技术方案参考同级项目 `table-capture`：Manifest V3、React、Vite、TypeScript、Tailwind、Zustand、本地存储、独立 Upgrade 页面、Creem 一次性购买和 License Key 激活。
+插件优先上架 Chrome Web Store，技术方案参考同级项目 `table-capture`：Manifest V3、React、Vite、TypeScript、Tailwind、Zustand、本地存储、独立 Upgrade 页面、Creem 月付/年付订阅和 License Key 激活。
 
 ## 2. 目标用户
 
@@ -133,10 +133,10 @@ X Bookmark Manager - Search, Tags & Export
 - 重复导入已软删除书签时，MVP 默认不自动恢复；需要在导入结果中计为重复或跳过，后续可增加恢复入口。
 
 限制：
-- MVP 不承诺一次性抓取所有历史书签。
-- MVP 不做绕过登录、绕过 X 限制、后台自动抓取。
-- 首版明确要求用户自己打开 X 书签页并触发导入。
-- MVP 不承诺获取未加载到页面中的书签。
+- 首版不做绕过登录、绕过 X 限制的抓取。
+- 首次导入仍要求用户自己打开 X 书签页并触发导入。
+- 当前实现可在用户授权的登录会话中通过 X Bookmarks GraphQL 分页导入，并提供可选 auto-sync；该能力需要在商店说明和隐私政策中明确解释。
+- 如果 X 页面或私有接口结构变化，导入可能降级为可见内容导入或提示用户刷新后重试。
 
 ### 5.3 书签管理页
 
@@ -300,10 +300,9 @@ tweet_id,author_name,author_handle,content,url,tags,folder,imported_at
 
 商业模式：
 - 免费版限制管理最近 200 条书签。
-- Pro 版一次性买断。
-- 早鸟价格建议 `$29`。
-- 正式价格建议 `$39`。
-- 后续加入云同步或 AI 自动标签后，可单独设计订阅，不放入 MVP。
+- Pro 版订阅：`$2.99/月` 或 `$24.99/年`。
+- 页面展示税前基础标价；实际税费由 Creem checkout 根据用户地区展示和收取。
+- 后续若加入云同步或 AI 自动标签，可评估更高档位，不放入当前 Pro 基础定价。
 
 免费版包含：
 - 可以导入超过 200 条书签到本地 IndexedDB，但只能查看、搜索、整理和导出最近 200 条未删除书签。
@@ -335,7 +334,7 @@ Pro 版包含：
 - 所有付费墙提示都必须说明本地数据仍保留，升级后可继续使用。
 
 Creem 接入要求：
-- 创建一次性购买产品。
+- 创建月付和年付订阅产品。
 - 开启 License Key。
 - 使用 Creem checkout URL。
 - 插件内不保存 Creem API Key。
@@ -386,7 +385,7 @@ src/upgrade/main.tsx
 页面内容：
 - BookmarkNest Pro 标题。
 - Free vs Pro 对比。
-- 一次性购买说明。
+- 月付和年付订阅说明。
 - Creem 购买按钮。
 - License Key 输入和激活。
 - 已激活状态。
@@ -395,7 +394,7 @@ src/upgrade/main.tsx
 
 文案基调：
 - 强调本地优先。
-- 强调不是订阅。
+- 强调低价订阅和随时取消。
 - 强调 X 书签不上传，除非未来用户主动开启云同步。
 
 ## 6. 页面和信息架构
@@ -545,11 +544,15 @@ https://twitter.com/*
 ```
 
 权限说明：
-- content script 使用 manifest 静态声明，因此 MVP 不默认需要 `activeTab` 和 `scripting`。
-- 如果后续改为用户点击后动态注入，再评估 `activeTab` 和 `scripting`。
+- content script 使用 manifest 静态声明，因此不默认需要 `activeTab` 和 `scripting`。
+- `storage` 用于设置、License 状态和导入状态。
 - `downloads` 用于导出文件。
 - `clipboardWrite` 仅用于复制原推链接，若实现不包含复制链接，可移除该权限。
-- 权限申请文案需要明确插件只读取用户打开的 X/Twitter 书签页内容。
+- `webRequest` 用于捕获 X Bookmarks GraphQL 请求形态。
+- `declarativeNetRequest` 和 `declarativeNetRequestWithHostAccess` 用于补齐扩展发起 X GraphQL 请求需要的请求头。
+- `cookies` 用于读取 X CSRF cookie，以便在用户现有登录会话中读取自己的书签。
+- `alarms` 用于用户开启后的可选 auto-sync。
+- 权限申请文案需要明确插件只处理 X/Twitter 书签页和用户开启的同步行为。
 
 避免首版使用 `<all_urls>`，除非后续确实要做通用网页导入。
 

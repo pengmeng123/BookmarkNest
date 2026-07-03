@@ -14,7 +14,7 @@ BookmarkNest may also store the latest import diagnostics locally. Diagnostics i
 
 BookmarkNest does not upload bookmark content, authors, media URLs, tags, or folders to a server.
 
-When the user starts an import, BookmarkNest sends authenticated requests to X/Twitter from the extension using the user's existing logged-in X session. These requests are used to read the user's X bookmarks and related profile metadata needed to display the local library.
+When the user starts an import or enables optional auto-sync, BookmarkNest sends authenticated requests to X/Twitter from the extension using the user's existing logged-in X session. These requests are used to read the user's X bookmarks and related profile metadata needed to display the local library.
 
 When activating or validating a Pro license, BookmarkNest sends license activation data to the license service, such as license key, device instance ID, email returned by the license provider, and extension version or similar activation metadata.
 
@@ -30,7 +30,7 @@ Users can:
 
 ## Third-Party Services
 
-BookmarkNest uses Creem for monthly subscription checkout, lifetime checkout, and license keys. License activation and validation are proxied through a Cloudflare Worker so the extension does not include Creem API secrets.
+BookmarkNest uses Creem for monthly and annual subscription checkout and license keys. License activation and validation are proxied through a Cloudflare Worker so the extension does not include Creem API secrets.
 
 ## Contact
 

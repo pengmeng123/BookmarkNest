@@ -16,7 +16,7 @@ The system SHALL let free users store more than 200 bookmarks locally but only v
 - **THEN** the app returns to free visibility rules without deleting local bookmarks
 
 ### Requirement: Upgrade page and checkout
-The extension SHALL provide an upgrade page with Free vs Monthly Pro vs Lifetime Pro comparison, Creem checkout entries, license activation, active status, deactivation, and support contact.
+The extension SHALL provide an upgrade page with Free vs Monthly Pro vs Annual Pro comparison, Creem checkout entries, license activation, active status, deactivation, and support contact.
 
 #### Scenario: Checkout starts
 - **WHEN** the user selects the purchase action

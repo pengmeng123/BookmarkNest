@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
 ### Requirement: Permission minimization
-The extension SHALL request only permissions required for the MVP and SHALL avoid `<all_urls>`.
+The extension SHALL request only permissions required for local storage, X bookmark import, optional auto-sync, and local exports, and SHALL avoid `<all_urls>`.
 
-#### Scenario: MVP manifest permissions
+#### Scenario: Manifest permissions
 - **WHEN** the extension manifest is built
-- **THEN** permissions include local storage and downloads, plus clipboard only if copy-link behavior is implemented
+- **THEN** permissions include local storage, downloads, clipboard copy, X request capture/header support, X CSRF cookie access, and optional alarm-based sync
 
 #### Scenario: Host permissions
 - **WHEN** the extension manifest is built
@@ -38,4 +38,4 @@ Chrome Web Store copy, screenshots, permissions explanation, and privacy policy 
 
 #### Scenario: Privacy policy
 - **WHEN** the privacy policy is published
-- **THEN** it describes local storage, license activation data flow, export, and deletion behavior
+- **THEN** it describes local storage, X import and optional auto-sync requests, license activation data flow, export, and deletion behavior

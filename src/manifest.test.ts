@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { manifest } from './manifest';
 
 describe('manifest compliance', () => {
-  it('uses constrained permissions for MVP', () => {
+  it('uses constrained permissions for X import and sync', () => {
     expect(manifest.permissions).not.toContain('<all_urls>');
     expect(manifest.permissions).not.toContain('activeTab');
     expect(manifest.permissions).not.toContain('scripting');
@@ -13,7 +13,8 @@ describe('manifest compliance', () => {
       'webRequest',
       'declarativeNetRequest',
       'declarativeNetRequestWithHostAccess',
-      'cookies'
+      'cookies',
+      'alarms'
     ]));
   });
 
