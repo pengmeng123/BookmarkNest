@@ -11,6 +11,8 @@ interface BookmarkListProps {
   error: string | null;
   hasSearchQuery: boolean;
   focusedIndex?: number | null;
+  activeBookmarkId?: string | null;
+  onOpen: (bookmarkId: string) => void;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
@@ -29,6 +31,8 @@ export function BookmarkList({
   error,
   hasSearchQuery,
   focusedIndex,
+  activeBookmarkId,
+  onOpen,
   onArchive,
   onDelete,
   onMove,
@@ -39,9 +43,7 @@ export function BookmarkList({
 }: BookmarkListProps) {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const visibleMatches = useMemo(() => matches.slice(0, visibleLimit), [matches, visibleLimit]);
-  const sentinelRef = useIntersectionObserver(
-    () => setVisibleLimit((current) => current + PAGE_SIZE)
-  );
+  const sentinelRef = useIntersectionObserver(() => setVisibleLimit((current) => current + PAGE_SIZE));
 
   useEffect(() => {
     setVisibleLimit(PAGE_SIZE);
@@ -65,7 +67,7 @@ export function BookmarkList({
     const isFilteredEmpty = totalCount > 0 || hasSearchQuery;
     return (
       <div className="flex min-h-[460px] items-center justify-center p-8">
-        <div className="max-w-sm rounded-app border border-dashed border-border bg-background px-6 py-8 text-center">
+        <div className="max-w-sm border border-dashed border-border bg-background/60 px-6 py-8 text-center">
           <p className="text-sm font-medium text-foreground">{isFilteredEmpty ? 'No matching bookmarks' : 'No bookmarks yet'}</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {isFilteredEmpty
@@ -78,13 +80,15 @@ export function BookmarkList({
   }
 
   return (
-    <div className="divide-y divide-border">
+    <div>
       {visibleMatches.map(({ bookmark, matchedTerms }, index) => (
         <BookmarkCard
           key={bookmark.id}
           bookmark={bookmark}
           matchedTerms={matchedTerms}
           focused={focusedIndex === index}
+          active={activeBookmarkId === bookmark.id}
+          onOpen={onOpen}
           onArchive={onArchive}
           onDelete={onDelete}
           onMove={onMove}

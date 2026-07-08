@@ -4,9 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BookmarkNest Pro</title>
-    <script>
-      (function(){try{var s=typeof chrome!=='undefined'&&chrome.storage&&chrome.storage.local;if(!s)return;s.get('settings',function(r){var t=r&&r.settings&&r.settings.theme;if(t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('dark');})}catch(e){}})();
-    </script>
+    <script type="module" src="../lib/theme/preload.ts"></script>
   </head>
   <body>
     <div id="root"></div>

@@ -1,4 +1,4 @@
-import type { ExportFormat } from './exportBookmarks';
+import type { ExportFormat, ExportOptions } from './exportBookmarks';
 import { createDownloadPayload } from './exportBookmarks';
 import type { BookmarkListItem } from '../db/bookmarkRepository';
 
@@ -25,7 +25,7 @@ export async function downloadText(filename: string, content: string, mimeType =
   }
 }
 
-export async function downloadBookmarks(format: ExportFormat, bookmarks: BookmarkListItem[]) {
-  const payload = createDownloadPayload(format, bookmarks);
+export async function downloadBookmarks(format: ExportFormat, bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
+  const payload = createDownloadPayload(format, bookmarks, options);
   await downloadText(payload.filename, payload.content, payload.mimeType);
 }

@@ -1,6 +1,9 @@
 import type { BookmarkListItem } from '../db/bookmarkRepository';
 
 export type ExportFormat = 'json' | 'markdown' | 'csv';
+export interface ExportOptions {
+  includeNotes?: boolean;
+}
 
 export interface JsonBackup {
   exportedAt: string;
@@ -11,6 +14,7 @@ export interface JsonBackup {
     authorName: string;
     authorHandle: string;
     contentText: string;
+    note?: string;
     mediaUrls: string[];
     tags: string[];
     folder: string | null;
@@ -32,6 +36,7 @@ export function createJsonBackup(bookmarks: BookmarkListItem[], now = new Date()
       authorName: bookmark.authorName,
       authorHandle: bookmark.authorHandle,
       contentText: bookmark.contentText,
+      note: bookmark.note,
       mediaUrls: bookmark.mediaUrls ?? [],
       tags: bookmark.tags.map((tag) => tag.name),
       folder: bookmark.folder?.name ?? null,
@@ -44,7 +49,7 @@ function formatDate(timestamp: number) {
   return new Date(timestamp).toISOString().slice(0, 10);
 }
 
-export function createMarkdownExport(bookmarks: BookmarkListItem[]) {
+export function createMarkdownExport(bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
   const groups = new Map<string, BookmarkListItem[]>();
 
   for (const bookmark of bookmarks.filter(eligible)) {
@@ -57,6 +62,7 @@ export function createMarkdownExport(bookmarks: BookmarkListItem[]) {
       const body = items
         .map((bookmark) => {
           const tags = bookmark.tags.map((tag) => tag.name).join(', ') || 'None';
+          const note = options.includeNotes && bookmark.note?.trim() ? ['', `- Note: ${bookmark.note.trim()}`] : [];
           return [
             `### @${bookmark.authorHandle} - ${bookmark.authorName}`,
             '',
@@ -65,6 +71,7 @@ export function createMarkdownExport(bookmarks: BookmarkListItem[]) {
             ...(bookmark.mediaUrls?.length ? [`- Media: ${bookmark.mediaUrls.join(' , ')}`] : []),
             `- URL: ${bookmark.tweetUrl ?? ''}`,
             `- Tags: ${tags}`,
+            ...note,
             `- Imported: ${formatDate(bookmark.importedAt)}`
           ].join('\n');
         })
@@ -86,8 +93,8 @@ function csvCell(value: string | number | undefined | null) {
   return text;
 }
 
-export function createCsvExport(bookmarks: BookmarkListItem[]) {
-  const header = ['tweet_id', 'author_name', 'author_handle', 'content', 'url', 'media_urls', 'tags', 'folder', 'imported_at'];
+export function createCsvExport(bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
+  const header = ['tweet_id', 'author_name', 'author_handle', 'content', 'url', 'media_urls', 'tags', 'folder', ...(options.includeNotes ? ['note'] : []), 'imported_at'];
   const rows = bookmarks.filter(eligible).map((bookmark) => [
     bookmark.tweetId,
     bookmark.authorName,
@@ -97,6 +104,7 @@ export function createCsvExport(bookmarks: BookmarkListItem[]) {
     (bookmark.mediaUrls ?? []).join(' '),
     bookmark.tags.map((tag) => tag.name).join('; '),
     bookmark.folder?.name ?? 'Uncategorized',
+    ...(options.includeNotes ? [bookmark.note ?? ''] : []),
     formatDate(bookmark.importedAt)
   ]);
 
@@ -108,7 +116,7 @@ export function createExportFilename(format: ExportFormat, now = new Date()) {
   return `bookmarknest-export-${formatDate(now.getTime())}.${extension}`;
 }
 
-export function createDownloadPayload(format: ExportFormat, bookmarks: BookmarkListItem[]) {
+export function createDownloadPayload(format: ExportFormat, bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
   if (format === 'json') {
     return {
       filename: createExportFilename(format),
@@ -121,13 +129,13 @@ export function createDownloadPayload(format: ExportFormat, bookmarks: BookmarkL
     return {
       filename: createExportFilename(format),
       mimeType: 'text/markdown',
-      content: createMarkdownExport(bookmarks)
+      content: createMarkdownExport(bookmarks, options)
     };
   }
 
   return {
     filename: createExportFilename(format),
     mimeType: 'text/csv',
-    content: createCsvExport(bookmarks)
+    content: createCsvExport(bookmarks, options)
   };
 }

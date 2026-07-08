@@ -1,26 +1,20 @@
-import { FREE_BOOKMARK_LIMIT } from '../../shared/constants';
 import type { LicenseData } from '../../shared/types';
 
-export type ProCapability = 'unlimited-bookmarks' | 'markdown-export' | 'csv-export' | 'bulk-actions' | 'advanced-filters';
+export type ProCapability =
+  | 'saved-views'
+  | 'bookmark-notes'
+  | 'markdown-export'
+  | 'csv-export'
+  | 'bulk-actions'
+  | 'auto-sync'
+  | 'mirror-removals';
 
 export function isProActive(license: LicenseData) {
   return license.pro && (license.validationStatus === 'valid' || license.validationStatus === 'offline');
 }
 
 export function canUseCapability(license: LicenseData, capability: ProCapability) {
-  if (capability === 'unlimited-bookmarks') {
-    return isProActive(license);
-  }
-
   return isProActive(license);
-}
-
-export function getFreeLimitMessage(totalUndeleted: number) {
-  if (totalUndeleted <= FREE_BOOKMARK_LIMIT) {
-    return null;
-  }
-
-  return `Free users can manage the recent ${FREE_BOOKMARK_LIMIT} bookmarks. Your older local bookmarks are kept and unlock after Pro activation.`;
 }
 
 export function shouldValidateLicense(license: LicenseData, now = Date.now()) {

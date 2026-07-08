@@ -1,5 +1,5 @@
 import { ChevronsUpDown } from 'lucide-react';
-import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react';
+import type { InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
 
 import { cn } from '../lib/utils/cn';
 
@@ -48,5 +48,17 @@ export function SelectInput({ className, children, ...props }: SelectHTMLAttribu
         className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
       />
     </div>
+  );
+}
+
+export function TextareaInput({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={cn(
+        'min-h-[132px] w-full rounded-app border border-border bg-background px-3 py-2.5 text-sm leading-6 outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15',
+        className
+      )}
+      {...props}
+    />
   );
 }

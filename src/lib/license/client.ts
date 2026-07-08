@@ -9,6 +9,7 @@ export interface LicenseResponse {
   licenseKey: string;
   instanceId: string;
   email: string;
+  plan?: LicenseData['plan'];
   expiresAt: string | null;
 }
 
@@ -67,6 +68,7 @@ function toLicenseData(response: LicenseResponse): LicenseData {
     licenseKey: response.licenseKey,
     instanceId: response.instanceId,
     email: response.email,
+    plan: response.plan ?? 'unknown',
     activatedAt: now,
     expiresAt: response.expiresAt,
     lastValidatedAt: now,

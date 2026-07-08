@@ -435,7 +435,10 @@ async function scrapeOperationQueryIdFromBundles(operationName: string) {
 
   for (const url of orderedUrls.slice(0, 60)) {
     try {
-      const jsResponse = await fetch(url, { credentials: 'include' });
+      const jsResponse = await fetch(url, { credentials: 'omit' });
+      if (!jsResponse.ok) {
+        continue;
+      }
       const queryId = extractOperationQueryIdFromJs(await jsResponse.text(), operationName);
       if (queryId) {
         return queryId;

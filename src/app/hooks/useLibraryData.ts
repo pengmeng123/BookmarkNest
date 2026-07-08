@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import {
+  listSavedViews,
   listBookmarkItems,
   listFolders,
   listImportSessions,
@@ -11,11 +12,13 @@ import {
   type BookmarkCounts
 } from '../../lib/db/bookmarkRepository';
 import type { Folder, ImportSession, Tag } from '../../shared/types';
+import type { SavedView } from '../../shared/types';
 
 export interface LibraryData {
   bookmarks: BookmarkListItem[];
   folders: Folder[];
   tags: Tag[];
+  savedViews: SavedView[];
   importSessions: ImportSession[];
   counts: BookmarkCounts;
   loading: boolean;
@@ -23,12 +26,13 @@ export interface LibraryData {
   refresh: () => Promise<void>;
 }
 
-const emptyCounts: BookmarkCounts = { total: 0, uncategorized: 0, archived: 0, byFolder: {} };
+const emptyCounts: BookmarkCounts = { total: 0, uncategorized: 0, archived: 0, withNotes: 0, byFolder: {} };
 
 export function useLibraryData(filters: BookmarkListFilters): LibraryData {
   const [bookmarks, setBookmarks] = useState<BookmarkListItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [importSessions, setImportSessions] = useState<ImportSession[]>([]);
   const [counts, setCounts] = useState<BookmarkCounts>(emptyCounts);
   const [loading, setLoading] = useState(true);
@@ -38,16 +42,18 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
     setLoading(true);
     setError(null);
     try {
-      const [nextBookmarks, nextFolders, nextTags, nextImportSessions, nextCounts] = await Promise.all([
+      const [nextBookmarks, nextFolders, nextTags, nextSavedViews, nextImportSessions, nextCounts] = await Promise.all([
         listBookmarkItems(filters),
         listFolders(),
         listTags(),
+        listSavedViews(),
         listImportSessions(),
         getBookmarkCounts()
       ]);
       setBookmarks(nextBookmarks);
       setFolders(nextFolders);
       setTags(nextTags);
+      setSavedViews(nextSavedViews);
       setImportSessions(nextImportSessions);
       setCounts(nextCounts);
     } catch (err) {
@@ -61,5 +67,5 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
     void refresh();
   }, [refresh]);
 
-  return { bookmarks, folders, tags, importSessions, counts, loading, error, refresh };
+  return { bookmarks, folders, tags, savedViews, importSessions, counts, loading, error, refresh };
 }

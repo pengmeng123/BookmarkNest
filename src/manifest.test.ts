@@ -18,8 +18,8 @@ describe('manifest compliance', () => {
     ]));
   });
 
-  it('limits host permissions to X/Twitter', () => {
-    expect(manifest.host_permissions).toEqual(['https://x.com/*', 'https://twitter.com/*']);
+  it('limits host permissions to X/Twitter and the license worker', () => {
+    expect(manifest.host_permissions).toEqual(['https://x.com/*', 'https://twitter.com/*', 'https://bookmarknest-license-worker.pp121111.workers.dev/*']);
   });
 
   it('uses packaged extension entry points', () => {

@@ -1,5 +1,5 @@
 import '../lib/utils/translateGuard';
-import { AlertTriangle, Download, LoaderCircle, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Download, KeyRound, LoaderCircle, Trash2, Upload } from 'lucide-react';
 import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -11,12 +11,51 @@ import { PageShell } from '../components/PageShell';
 import { useTheme } from '../hooks/useTheme';
 import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
 import { downloadText } from '../lib/export/download';
+import { canUseCapability } from '../lib/license/pro';
+import { deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import { getSettings, saveSettings } from '../lib/storage/localStorage';
-import type { ImportDiagnostics } from '../shared/types';
+import { emptyLicenseData, getSettings, saveSettings } from '../lib/storage/localStorage';
+import type { ImportDiagnostics, LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
 type Status = { type: 'success' | 'error'; message: string } | null;
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return undefined;
+  }
+
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(value));
+}
+
+function getLicensePlanLabel(license: LicenseData) {
+  if (license.plan === 'monthly') {
+    return 'Monthly Pro';
+  }
+  if (license.plan === 'annual') {
+    return 'Annual Pro';
+  }
+  if (license.plan === 'lifetime') {
+    return 'Lifetime Pro';
+  }
+
+  if (!license.expiresAt) {
+    return 'Pro';
+  }
+
+  const activatedAt = license.activatedAt ? Date.parse(license.activatedAt) : Date.now();
+  const expiresAt = Date.parse(license.expiresAt);
+  const durationDays = Math.round((expiresAt - activatedAt) / (24 * 60 * 60 * 1000));
+
+  if (durationDays > 330) {
+    return 'Annual Pro';
+  }
+  if (durationDays > 20) {
+    return 'Monthly Pro';
+  }
+
+  return 'Pro';
+}
 
 function Options() {
   const { theme, setTheme } = useTheme();
@@ -27,6 +66,8 @@ function Options() {
   const [autoSync, setAutoSync] = useState(false);
   const [syncInterval, setSyncInterval] = useState(60);
   const [mirrorRemovals, setMirrorRemovals] = useState(false);
+  const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
+  const [licenseBusy, setLicenseBusy] = useState(false);
   const [versionClicks, setVersionClicks] = useState(0);
   const showDiagnostics = versionClicks >= 5;
   const extensionVersion = useMemo(() => {
@@ -36,12 +77,20 @@ function Options() {
     return chrome.runtime?.getManifest?.().version ?? '0.1.0';
   }, []);
 
+  const canUseAutoSync = canUseCapability(license, 'auto-sync');
+  const canUseMirrorRemovals = canUseCapability(license, 'mirror-removals');
+
+  function openUpgrade() {
+    void sendRuntimeMessage({ type: 'OPEN_UPGRADE' });
+  }
+
   useEffect(() => {
     void getSettings().then((s) => {
       setAutoSync(s.autoSync);
       setSyncInterval(s.syncIntervalMinutes);
       setMirrorRemovals(s.mirrorRemovals);
     });
+    void validateStoredLicenseIfNeeded().then(setLicense);
   }, []);
 
   async function handleExportBackup() {
@@ -130,6 +179,24 @@ function Options() {
     }
   }
 
+  async function handleDeactivateLicense() {
+    if (licenseBusy) {
+      return;
+    }
+
+    setLicenseBusy(true);
+    setStatus(null);
+    try {
+      const nextLicense = await deactivateStoredLicense();
+      setLicense(nextLicense);
+      setStatus({ type: 'success', message: 'License deactivated. You can activate another License Key from the Pro page.' });
+    } catch (error) {
+      setStatus({ type: 'error', message: error instanceof Error ? error.message : 'Unable to deactivate license.' });
+    } finally {
+      setLicenseBusy(false);
+    }
+  }
+
   return (
     <PageShell title="Options" description="Manage preferences, local data, license, and privacy controls.">
       <section className="grid gap-4 md:grid-cols-2">
@@ -153,6 +220,7 @@ function Options() {
               <input
                 type="checkbox"
                 checked={autoSync}
+                disabled={!canUseAutoSync}
                 onChange={(e) => {
                   const next = e.target.checked;
                   setAutoSync(next);
@@ -162,6 +230,12 @@ function Options() {
               />
               Enable auto-sync
             </label>
+            {!canUseAutoSync ? (
+              <button className="inline-flex items-center gap-2 text-xs font-medium text-primary hover:underline" onClick={openUpgrade}>
+                <KeyRound size={12} />
+                Upgrade to unlock background sync
+              </button>
+            ) : null}
             {autoSync ? (
               <Field label="Sync interval">
                 <SelectInput
@@ -193,6 +267,7 @@ function Options() {
             <input
               type="checkbox"
               checked={mirrorRemovals}
+              disabled={!canUseMirrorRemovals}
               onChange={(e) => {
                 const next = e.target.checked;
                 setMirrorRemovals(next);
@@ -202,6 +277,12 @@ function Options() {
             />
             Remove posts I un-bookmarked on X
           </label>
+          {!canUseMirrorRemovals ? (
+            <button className="mt-2 inline-flex items-center gap-2 text-xs font-medium text-primary hover:underline" onClick={openUpgrade}>
+              <KeyRound size={12} />
+              Upgrade to mirror removals
+            </button>
+          ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
             Only acts on complete imports, never on partial or cancelled ones. Removals are recoverable from Trash.
           </p>
@@ -236,10 +317,36 @@ function Options() {
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">License</h2>
-          <p className="mt-2 text-sm text-muted-foreground">Activate or manage your local Pro license.</p>
-          <Button className="mt-3" size="sm" onClick={() => void sendRuntimeMessage({ type: 'OPEN_UPGRADE' })}>
-            Manage license
-          </Button>
+          <p className="mt-2 text-sm text-muted-foreground">Activate Pro for saved views, notes, bulk actions, and sync controls.</p>
+          {license.pro ? (
+            <div className="mt-3 space-y-3">
+              <div className="rounded-app border border-primary/20 bg-primary/5 p-3 text-sm">
+                <div className="flex items-center gap-2 font-semibold text-primary">
+                  <KeyRound size={15} />
+                  {getLicensePlanLabel(license)}
+                </div>
+                {license.email ? <div className="mt-1 text-muted-foreground">Email: {license.email}</div> : null}
+                {license.activatedAt ? <div className="mt-1 text-muted-foreground">Activated: {formatDate(license.activatedAt)}</div> : null}
+                <div className="mt-1 text-muted-foreground">Expires: {license.expiresAt ? formatDate(license.expiresAt) : 'Never'}</div>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">
+                One License Key can activate up to 3 devices. Deactivate this device before switching to free a slot.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="danger" onClick={() => void handleDeactivateLicense()} disabled={licenseBusy}>
+                  {licenseBusy ? <LoaderCircle size={14} className="animate-spin" /> : <KeyRound size={14} />}
+                  {licenseBusy ? 'Deactivating...' : 'Deactivate device'}
+                </Button>
+                <Button size="sm" onClick={openUpgrade}>
+                  Pro page
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button className="mt-3" size="sm" onClick={openUpgrade}>
+              Activate license
+            </Button>
+          )}
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Privacy</h2>

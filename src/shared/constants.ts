@@ -1,6 +1,5 @@
 export const APP_NAME = 'BookmarkNest';
 export const STORE_NAME = 'X Bookmark Manager';
-export const FREE_BOOKMARK_LIMIT = 200;
 
 export const EXTENSION_PAGES = {
   app: 'src/app/index.html',

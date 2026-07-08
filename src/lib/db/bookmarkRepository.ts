@@ -1,8 +1,17 @@
-import { FREE_BOOKMARK_LIMIT } from '../../shared/constants';
-import type { Bookmark, BookmarkInput, Folder, ImportSession, Tag } from '../../shared/types';
+import type { Bookmark, BookmarkInput, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
 import { db } from './database';
 
 export interface LocalBackup {
+  schemaVersion: 3;
+  exportedAt: number;
+  bookmarks: Bookmark[];
+  folders: Folder[];
+  tags: Tag[];
+  importSessions: ImportSession[];
+  savedViews: SavedView[];
+}
+
+interface LegacyLocalBackup {
   schemaVersion: 2;
   exportedAt: number;
   bookmarks: Bookmark[];
@@ -118,6 +127,16 @@ export async function upsertBookmark(input: BookmarkInput) {
   return { bookmark, inserted: true, restored: false };
 }
 
+export async function updateBookmarkNote(bookmarkId: string, note: string) {
+  const trimmed = note.trim();
+  const nextNote = trimmed.length > 0 ? note : undefined;
+  await db.bookmarks.update(bookmarkId, {
+    note: nextNote,
+    noteUpdatedAt: nextNote ? Date.now() : undefined,
+    updatedAt: Date.now()
+  });
+}
+
 export async function softDeleteBookmark(bookmarkId: string) {
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
     const bookmark = await db.bookmarks.get(bookmarkId);
@@ -134,12 +153,6 @@ export async function softDeleteBookmark(bookmarkId: string) {
   });
 }
 
-// Mirror-removal: after a *complete* X import, soft-delete the X-sourced
-// bookmarks that are no longer present on x.com (i.e. were un-bookmarked
-// there). `presentKeys` holds the `dedupeKey` of every bookmark in the
-// authoritative imported set — anything X-sourced not in it is removed.
-// Only ever called when the caller has confirmed the import was complete,
-// since a truncated set would otherwise wipe the library. Returns the count.
 export async function softDeleteMissingXBookmarks(presentKeys: Set<string>): Promise<number> {
   let removed = 0;
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
@@ -183,41 +196,44 @@ export async function setBookmarkArchived(bookmarkId: string, archived: boolean)
 }
 
 export async function resetDomainData() {
-  await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.importSessions, db.searchMetadata, async () => {
+  await db.transaction('rw', [db.bookmarks, db.folders, db.tags, db.importSessions, db.searchMetadata, db.savedViews], async () => {
     await Promise.all([
       db.bookmarks.clear(),
       db.folders.clear(),
       db.tags.clear(),
       db.importSessions.clear(),
-      db.searchMetadata.clear()
+      db.searchMetadata.clear(),
+      db.savedViews.clear()
     ]);
   });
 }
 
 export async function exportLocalBackup(): Promise<LocalBackup> {
-  const [bookmarks, folders, tags, importSessions] = await Promise.all([
+  const [bookmarks, folders, tags, importSessions, savedViews] = await Promise.all([
     db.bookmarks.toArray(),
     db.folders.toArray(),
     db.tags.toArray(),
-    db.importSessions.toArray()
+    db.importSessions.toArray(),
+    db.savedViews.orderBy('updatedAt').reverse().toArray()
   ]);
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     exportedAt: Date.now(),
     bookmarks,
     folders,
     tags,
-    importSessions
+    importSessions,
+    savedViews
   };
 }
 
-function isLocalBackup(value: unknown): value is LocalBackup {
+function isLegacyLocalBackup(value: unknown): value is LegacyLocalBackup {
   if (!value || typeof value !== 'object') {
     return false;
   }
 
-  const backup = value as Partial<LocalBackup>;
+  const backup = value as Partial<LegacyLocalBackup>;
   return (
     backup.schemaVersion === 2 &&
     Array.isArray(backup.bookmarks) &&
@@ -227,24 +243,44 @@ function isLocalBackup(value: unknown): value is LocalBackup {
   );
 }
 
+function isLocalBackup(value: unknown): value is LocalBackup {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const backup = value as Partial<LocalBackup>;
+  return (
+    backup.schemaVersion === 3 &&
+    Array.isArray(backup.bookmarks) &&
+    Array.isArray(backup.folders) &&
+    Array.isArray(backup.tags) &&
+    Array.isArray(backup.importSessions) &&
+    Array.isArray(backup.savedViews)
+  );
+}
+
 export async function importLocalBackup(value: unknown) {
-  if (!isLocalBackup(value)) {
+  if (!isLocalBackup(value) && !isLegacyLocalBackup(value)) {
     throw new Error('Backup file is not a valid BookmarkNest backup.');
   }
 
-  await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.importSessions, db.searchMetadata, async () => {
+  const savedViews = isLocalBackup(value) ? value.savedViews : [];
+
+  await db.transaction('rw', [db.bookmarks, db.folders, db.tags, db.importSessions, db.searchMetadata, db.savedViews], async () => {
     await Promise.all([
       db.bookmarks.clear(),
       db.folders.clear(),
       db.tags.clear(),
       db.importSessions.clear(),
-      db.searchMetadata.clear()
+      db.searchMetadata.clear(),
+      db.savedViews.clear()
     ]);
     await Promise.all([
       db.bookmarks.bulkPut(value.bookmarks),
       db.folders.bulkPut(value.folders),
       db.tags.bulkPut(value.tags),
-      db.importSessions.bulkPut(value.importSessions)
+      db.importSessions.bulkPut(value.importSessions),
+      savedViews.length ? db.savedViews.bulkPut(savedViews) : Promise.resolve()
     ]);
   });
 
@@ -281,10 +317,14 @@ export async function deleteFolder(folderId: string): Promise<FolderRestoreSnaps
     folderId: bookmark.folderId
   }));
 
-  await db.transaction('rw', db.folders, db.bookmarks, async () => {
+  await db.transaction('rw', db.folders, db.bookmarks, db.savedViews, async () => {
     await db.bookmarks.where('folderId').equals(folderId).modify((bookmark) => {
       delete bookmark.folderId;
       bookmark.updatedAt = Date.now();
+    });
+    await db.savedViews.where('folderId').equals(folderId).modify((view) => {
+      view.folderId = null;
+      view.updatedAt = Date.now();
     });
     await db.folders.delete(folderId);
   });
@@ -380,10 +420,14 @@ export async function deleteTag(tagId: string): Promise<TagRestoreSnapshot | nul
 
   const bookmarkIds = (await db.bookmarks.filter((bookmark) => bookmark.tagIds.includes(tagId)).toArray()).map((bookmark) => bookmark.id);
 
-  await db.transaction('rw', db.bookmarks, db.tags, async () => {
+  await db.transaction('rw', db.bookmarks, db.tags, db.savedViews, async () => {
     await db.bookmarks.filter((bookmark) => bookmark.tagIds.includes(tagId)).modify((bookmark) => {
       bookmark.tagIds = bookmark.tagIds.filter((id) => id !== tagId);
       bookmark.updatedAt = Date.now();
+    });
+    await db.savedViews.where('tagId').equals(tagId).modify((view) => {
+      view.tagId = null;
+      view.updatedAt = Date.now();
     });
     await db.tags.delete(tagId);
   });
@@ -404,26 +448,15 @@ export async function restoreTag(snapshot: TagRestoreSnapshot) {
   });
 }
 
-export async function getManageableBookmarkIds(isPro: boolean) {
-  const bookmarks = (await db.bookmarks.filter((bookmark) => !bookmark.deleted).toArray()).sort(
-    (left, right) => right.importedAt - left.importedAt
-  );
-
-  const scoped = isPro ? bookmarks : bookmarks.slice(0, FREE_BOOKMARK_LIMIT);
-  return new Set(scoped.map((bookmark) => bookmark.id));
-}
-
 export interface BookmarkListFilters {
   folderId?: string | null;
   tagId?: string | null;
   includeArchived?: boolean;
-  isPro?: boolean;
 }
 
 export interface BookmarkListItem extends Bookmark {
   folder?: Folder;
   tags: Tag[];
-  locked: boolean;
 }
 
 function compareBookmarksBySourceOrder(left: Bookmark, right: Bookmark) {
@@ -441,12 +474,7 @@ function compareBookmarksBySourceOrder(left: Bookmark, right: Bookmark) {
 }
 
 export async function listBookmarkItems(filters: BookmarkListFilters = {}): Promise<BookmarkListItem[]> {
-  const [bookmarks, folders, tags, manageableIds] = await Promise.all([
-    db.bookmarks.toArray(),
-    db.folders.toArray(),
-    db.tags.toArray(),
-    getManageableBookmarkIds(Boolean(filters.isPro))
-  ]);
+  const [bookmarks, folders, tags] = await Promise.all([db.bookmarks.toArray(), db.folders.toArray(), db.tags.toArray()]);
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
   const tagById = new Map(tags.map((tag) => [tag.id, tag]));
 
@@ -467,8 +495,7 @@ export async function listBookmarkItems(filters: BookmarkListFilters = {}): Prom
     .map((bookmark) => ({
       ...bookmark,
       folder: bookmark.folderId ? folderById.get(bookmark.folderId) : undefined,
-      tags: bookmark.tagIds.map((tagId) => tagById.get(tagId)).filter((tag): tag is Tag => Boolean(tag)),
-      locked: !manageableIds.has(bookmark.id)
+      tags: bookmark.tagIds.map((tagId) => tagById.get(tagId)).filter((tag): tag is Tag => Boolean(tag))
     }));
 }
 
@@ -476,6 +503,7 @@ export interface BookmarkCounts {
   total: number;
   uncategorized: number;
   archived: number;
+  withNotes: number;
   byFolder: Record<string, number>;
 }
 
@@ -484,7 +512,11 @@ export async function getBookmarkCounts(): Promise<BookmarkCounts> {
   const active = bookmarks.filter((b) => !b.archived);
   const byFolder: Record<string, number> = {};
   let uncategorized = 0;
+  let withNotes = 0;
   for (const b of active) {
+    if (b.note?.trim()) {
+      withNotes += 1;
+    }
     if (b.folderId) {
       byFolder[b.folderId] = (byFolder[b.folderId] ?? 0) + 1;
     } else {
@@ -495,6 +527,7 @@ export async function getBookmarkCounts(): Promise<BookmarkCounts> {
     total: active.length,
     uncategorized,
     archived: bookmarks.length - active.length,
+    withNotes,
     byFolder
   };
 }
@@ -511,4 +544,37 @@ export async function listTags() {
 
 export async function listImportSessions(limit = 8) {
   return db.importSessions.orderBy('startedAt').reverse().limit(limit).toArray();
+}
+
+export async function listSavedViews() {
+  return db.savedViews.orderBy('updatedAt').reverse().toArray();
+}
+
+export async function createSavedView(input: Omit<SavedView, 'id' | 'createdAt' | 'updatedAt'>) {
+  const now = Date.now();
+  const savedView: SavedView = {
+    id: createId('view'),
+    name: input.name,
+    query: input.query,
+    sortKey: input.sortKey,
+    folderId: input.folderId ?? null,
+    tagId: input.tagId ?? null,
+    includeArchived: input.includeArchived,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  await db.savedViews.add(savedView);
+  return savedView;
+}
+
+export async function updateSavedView(savedViewId: string, input: Partial<Omit<SavedView, 'id' | 'createdAt' | 'updatedAt'>>) {
+  await db.savedViews.update(savedViewId, {
+    ...input,
+    updatedAt: Date.now()
+  });
+}
+
+export async function deleteSavedView(savedViewId: string) {
+  await db.savedViews.delete(savedViewId);
 }

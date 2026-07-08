@@ -1,4 +1,5 @@
 export type BookmarkSource = 'x-bookmarks-page' | 'manual-import';
+export type BookmarkSortKey = 'source' | 'date-posted' | 'date-imported' | 'author';
 
 export interface Bookmark {
   id: string;
@@ -15,6 +16,8 @@ export interface Bookmark {
   importedAt: number;
   sourceOrder?: number;
   updatedAt: number;
+  note?: string;
+  noteUpdatedAt?: number;
   folderId?: string;
   tagIds: string[];
   archived: boolean;
@@ -39,6 +42,18 @@ export interface Tag {
   createdAt: number;
   updatedAt: number;
   usageCount: number;
+}
+
+export interface SavedView {
+  id: string;
+  name: string;
+  query: string;
+  sortKey: BookmarkSortKey;
+  folderId?: string | null;
+  tagId?: string | null;
+  includeArchived: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type ImportSessionStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -82,6 +97,7 @@ export interface Settings {
 }
 
 export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';
+export type LicensePlan = 'monthly' | 'annual' | 'lifetime' | 'unknown';
 
 // Outcome of the most recent X sync (auto or manual API import). Persisted so
 // the popup can surface silent background failures instead of just going stale.
@@ -92,11 +108,14 @@ export interface LastSyncStatus {
   removed?: number;
   found?: number;
   error?: string;
-}export interface LicenseData {
+}
+
+export interface LicenseData {
   pro: boolean;
   licenseKey: string;
   instanceId: string;
   email: string;
+  plan?: LicensePlan;
   activatedAt: string | null;
   expiresAt: string | null;
   lastValidatedAt: string | null;

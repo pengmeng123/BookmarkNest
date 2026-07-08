@@ -20,31 +20,33 @@ function item(overrides: Partial<BookmarkListItem>): BookmarkListItem {
     deleted: false,
     dedupeKey: 'tweet:1',
     source: 'x-bookmarks-page',
-    locked: false,
     ...overrides
   };
 }
 
 describe('exportBookmarks', () => {
   it('creates JSON backups for provided eligible bookmarks', () => {
-    const backup = createJsonBackup([item({ id: 'one' }), item({ id: 'deleted', deleted: true })], new Date('2026-06-22T00:00:00.000Z'));
+    const backup = createJsonBackup([item({ id: 'one', note: 'Use in essay.' }), item({ id: 'deleted', deleted: true })], new Date('2026-06-22T00:00:00.000Z'));
 
     expect(backup.exportedAt).toBe('2026-06-22T00:00:00.000Z');
     expect(backup.bookmarks).toHaveLength(1);
     expect(backup.bookmarks[0].id).toBe('one');
+    expect(backup.bookmarks[0].note).toBe('Use in essay.');
   });
 
   it('creates Markdown with fallbacks', () => {
-    const markdown = createMarkdownExport([item({ folder: undefined, tags: [] })]);
+    const markdown = createMarkdownExport([item({ folder: undefined, tags: [], note: 'Quote this.' })], { includeNotes: true });
 
     expect(markdown).toContain('## Uncategorized');
     expect(markdown).toContain('- Tags: None');
+    expect(markdown).toContain('- Note: Quote this.');
   });
 
   it('escapes CSV commas, quotes, and newlines', () => {
-    const csv = createCsvExport([item({ contentText: 'Hello, "CSV"\nworld' })]);
+    const csv = createCsvExport([item({ contentText: 'Hello, "CSV"\nworld', note: 'Line one' })], { includeNotes: true });
 
     expect(csv).toContain('"Hello, ""CSV""\nworld"');
+    expect(csv).toContain('note');
   });
 
   it('creates dated filenames', () => {

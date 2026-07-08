@@ -4,14 +4,16 @@ import {
   addTagToBookmarks,
   createDedupeKey,
   createFolder,
+  createSavedView,
   createTag,
   deleteFolder,
+  deleteSavedView,
   deleteTag,
   exportLocalBackup,
-  getManageableBookmarkIds,
   importLocalBackup,
   listImportSessions,
   listBookmarkItems,
+  listSavedViews,
   moveBookmarksToFolder,
   removeTagFromBookmark,
   resetDomainData,
@@ -20,6 +22,8 @@ import {
   softDeleteBookmark,
   softDeleteMissingXBookmarks,
   setBookmarkArchived,
+  updateBookmarkNote,
+  updateSavedView,
   upsertBookmark
 } from './bookmarkRepository';
 import { db } from './database';
@@ -86,6 +90,38 @@ describe('bookmarkRepository', () => {
     expect(updated.bookmark.authorAvatarUrl).toBe('https://pbs.twimg.com/profile_images/real.jpg');
   });
 
+  it('updates bookmark notes in place', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+
+    await updateBookmarkNote(inserted.bookmark.id, 'Key angle for this thread');
+
+    const stored = await db.bookmarks.get(inserted.bookmark.id);
+    expect(stored?.note).toBe('Key angle for this thread');
+    expect(stored?.noteUpdatedAt).toEqual(expect.any(Number));
+  });
+
+  it('creates, updates, lists, and deletes saved views', async () => {
+    const savedView = await createSavedView({
+      name: 'AI research',
+      query: 'ai',
+      sortKey: 'source',
+      folderId: null,
+      tagId: null,
+      includeArchived: false
+    });
+
+    expect((await listSavedViews()).map((view) => view.name)).toEqual(['AI research']);
+
+    await updateSavedView(savedView.id, { name: 'Deep research', includeArchived: true });
+
+    const [updated] = await listSavedViews();
+    expect(updated.name).toBe('Deep research');
+    expect(updated.includeArchived).toBe(true);
+
+    await deleteSavedView(savedView.id);
+    expect(await listSavedViews()).toHaveLength(0);
+  });
+
   it('soft deletes bookmarks without removing records', async () => {
     const inserted = await upsertBookmark(bookmarkInput(1));
     await softDeleteBookmark(inserted.bookmark.id);
@@ -106,7 +142,6 @@ describe('bookmarkRepository', () => {
     expect(count).toBe(1);
     expect((await db.bookmarks.get(removed.bookmark.id))?.deleted).toBe(true);
     expect((await db.bookmarks.get(kept.bookmark.id))?.deleted).toBe(false);
-    // Manually imported bookmarks are never touched by X mirror-removal.
     expect((await db.bookmarks.get(manual.bookmark.id))?.deleted).toBe(false);
   });
 
@@ -192,7 +227,7 @@ describe('bookmarkRepository', () => {
     await addTagToBookmarks([inserted.bookmark.id], first.id);
     await addTagToBookmarks([inserted.bookmark.id], second.id);
 
-    const [item] = await listBookmarkItems({ isPro: true });
+    const [item] = await listBookmarkItems();
     expect(item.tags.map((tag) => tag.name).sort()).toEqual(['alpha', 'beta']);
   });
 
@@ -208,12 +243,12 @@ describe('bookmarkRepository', () => {
     await setBookmarkArchived(archived.bookmark.id, true);
     await softDeleteBookmark(deleted.bookmark.id);
 
-    const defaultItems = await listBookmarkItems({ isPro: true });
+    const defaultItems = await listBookmarkItems();
     expect(defaultItems.map((item) => item.id)).toEqual([visible.bookmark.id]);
     expect(defaultItems[0].folder?.name).toBe('Research');
     expect(defaultItems[0].tags[0].name).toBe('ai');
 
-    const archivedItems = await listBookmarkItems({ includeArchived: true, isPro: true });
+    const archivedItems = await listBookmarkItems({ includeArchived: true });
     expect(archivedItems.map((item) => item.id)).toEqual([archived.bookmark.id]);
   });
 
@@ -222,7 +257,7 @@ describe('bookmarkRepository', () => {
     const top = await upsertBookmark({ ...bookmarkInput(2), sourceOrder: 0 });
     const bottom = await upsertBookmark({ ...bookmarkInput(3), sourceOrder: 2 });
 
-    const items = await listBookmarkItems({ isPro: true });
+    const items = await listBookmarkItems();
 
     expect(items.map((item) => item.id)).toEqual([top.bookmark.id, middle.bookmark.id, bottom.bookmark.id]);
   });
@@ -236,43 +271,26 @@ describe('bookmarkRepository', () => {
     await moveBookmarksToFolder([first.bookmark.id], folder.id);
     await addTagToBookmarks([second.bookmark.id], tag.id);
 
-    await expect(listBookmarkItems({ folderId: folder.id, isPro: true })).resolves.toMatchObject([{ id: first.bookmark.id }]);
-    await expect(listBookmarkItems({ folderId: null, isPro: true })).resolves.toMatchObject([{ id: second.bookmark.id }]);
-    await expect(listBookmarkItems({ tagId: tag.id, isPro: true })).resolves.toMatchObject([{ id: second.bookmark.id }]);
+    await expect(listBookmarkItems({ folderId: folder.id })).resolves.toMatchObject([{ id: first.bookmark.id }]);
+    await expect(listBookmarkItems({ folderId: null })).resolves.toMatchObject([{ id: second.bookmark.id }]);
+    await expect(listBookmarkItems({ tagId: tag.id })).resolves.toMatchObject([{ id: second.bookmark.id }]);
   });
 
-  it('limits free manageable scope to the recent 200 undeleted bookmarks', async () => {
-    for (let index = 0; index < 205; index += 1) {
-      await upsertBookmark(bookmarkInput(index));
-    }
-
-    const freeIds = await getManageableBookmarkIds(false);
-    const proIds = await getManageableBookmarkIds(true);
-
-    expect(freeIds.size).toBe(200);
-    expect(proIds.size).toBe(205);
-
-    const freeItems = await listBookmarkItems({ isPro: false });
-    expect(freeItems.filter((item) => item.locked)).toHaveLength(5);
-  });
-
-  it('restores all imported bookmarks as manageable for Pro users', async () => {
-    for (let index = 0; index < 205; index += 1) {
-      await upsertBookmark(bookmarkInput(index));
-    }
-
-    const proItems = await listBookmarkItems({ isPro: true });
-
-    expect(proItems).toHaveLength(205);
-    expect(proItems.filter((item) => item.locked)).toHaveLength(0);
-  });
-
-  it('exports and imports a full local backup', async () => {
+  it('exports and imports a full local backup with notes and saved views', async () => {
     const inserted = await upsertBookmark(bookmarkInput(1));
     const folder = await createFolder('Backup');
     const tag = await createTag('restore');
     await moveBookmarksToFolder([inserted.bookmark.id], folder.id);
     await addTagToBookmarks([inserted.bookmark.id], tag.id);
+    await updateBookmarkNote(inserted.bookmark.id, 'Preserve this angle');
+    await createSavedView({
+      name: 'Restored lane',
+      query: 'restore',
+      sortKey: 'author',
+      folderId: folder.id,
+      tagId: tag.id,
+      includeArchived: false
+    });
     await db.importSessions.add({
       id: 'import_test',
       startedAt: 1,
@@ -290,9 +308,29 @@ describe('bookmarkRepository', () => {
     await resetDomainData();
     await importLocalBackup(backup);
 
-    const [item] = await listBookmarkItems({ isPro: true });
+    const [item] = await listBookmarkItems();
     expect(item.folder?.name).toBe('Backup');
     expect(item.tags.map((itemTag) => itemTag.name)).toEqual(['restore']);
+    expect(item.note).toBe('Preserve this angle');
     expect(await listImportSessions()).toHaveLength(1);
+    expect((await listSavedViews())[0]?.name).toBe('Restored lane');
+  });
+
+  it('imports legacy backups without saved views', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+    const legacyBackup = {
+      schemaVersion: 2 as const,
+      exportedAt: Date.now(),
+      bookmarks: [inserted.bookmark],
+      folders: [],
+      tags: [],
+      importSessions: []
+    };
+
+    await resetDomainData();
+    await importLocalBackup(legacyBackup);
+
+    expect(await listBookmarkItems()).toHaveLength(1);
+    expect(await listSavedViews()).toHaveLength(0);
   });
 });

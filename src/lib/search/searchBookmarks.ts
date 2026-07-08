@@ -1,6 +1,7 @@
 import type { BookmarkListItem } from '../db/bookmarkRepository';
+import type { BookmarkSortKey } from '../../shared/types';
 
-export type SortKey = 'source' | 'date-posted' | 'date-imported' | 'author';
+export type SortKey = BookmarkSortKey;
 
 export interface SearchMatch {
   bookmark: BookmarkListItem;
@@ -14,6 +15,7 @@ function normalize(value: string) {
 function buildSearchText(bookmark: BookmarkListItem) {
   return [
     bookmark.contentText,
+    bookmark.note ?? '',
     bookmark.authorName,
     bookmark.authorHandle,
     `@${bookmark.authorHandle}`,

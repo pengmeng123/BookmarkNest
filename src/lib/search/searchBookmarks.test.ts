@@ -18,7 +18,6 @@ function item(overrides: Partial<BookmarkListItem>): BookmarkListItem {
     deleted: false,
     dedupeKey: 'tweet:1',
     source: 'x-bookmarks-page',
-    locked: false,
     ...overrides
   };
 }
@@ -42,6 +41,12 @@ describe('searchBookmarks', () => {
     expect(searchBookmarks(bookmarks, '@ada')).toHaveLength(1);
     expect(searchBookmarks(bookmarks, 'research')).toHaveLength(1);
     expect(searchBookmarks(bookmarks, 'ideas')).toHaveLength(1);
+  });
+
+  it('matches bookmark notes as part of the research index', () => {
+    const bookmarks = [item({ id: 'one', note: 'Pull this into the keynote narrative.' })];
+
+    expect(searchBookmarks(bookmarks, 'keynote narrative')).toHaveLength(1);
   });
 
   it('uses multi-word AND matching', () => {

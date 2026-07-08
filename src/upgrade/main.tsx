@@ -1,5 +1,5 @@
 import '../lib/utils/translateGuard';
-import { BadgeDollarSign, CalendarClock, Check, ExternalLink, KeyRound, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { BadgeCheck, BadgeDollarSign, CalendarClock, Check, ExternalLink, KeyRound, Mail, Power, ShieldCheck, Sparkles, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -17,17 +17,18 @@ const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined)
 
 const freeFeatures = [
   { text: 'Search and read your full bookmark library', included: true },
-  { text: 'Organize up to 200 bookmarks with folders & tags', included: true },
+  { text: 'Organize bookmarks with folders, tags, archive, and delete', included: true },
   { text: 'Export JSON backups', included: true },
   { text: 'Markdown and CSV exports', included: false },
-  { text: 'Bulk actions across the full library', included: false }
+  { text: 'Saved views, research notes, and background sync', included: false }
 ];
 
 const proFeatures = [
-  'Unlimited local bookmark management',
+  'Saved views for repeat research lanes',
+  'Bookmark notes inside the research desk',
   'Markdown and CSV export',
   'Bulk select, move, tag, and delete',
-  'All imported bookmarks stay searchable',
+  'Background sync and mirror removals',
   'Future Pro feature updates'
 ];
 
@@ -56,6 +57,35 @@ function formatDate(value: string | null) {
   }
 
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(value));
+}
+
+function getLicensePlanLabel(license: LicenseData) {
+  if (license.plan === 'monthly') {
+    return 'Monthly Pro';
+  }
+  if (license.plan === 'annual') {
+    return 'Annual Pro';
+  }
+  if (license.plan === 'lifetime') {
+    return 'Lifetime Pro';
+  }
+
+  if (!license.expiresAt) {
+    return 'Pro';
+  }
+
+  const activatedAt = license.activatedAt ? Date.parse(license.activatedAt) : Date.now();
+  const expiresAt = Date.parse(license.expiresAt);
+  const durationDays = Math.round((expiresAt - activatedAt) / (24 * 60 * 60 * 1000));
+
+  if (durationDays > 330) {
+    return 'Annual Pro';
+  }
+  if (durationDays > 20) {
+    return 'Monthly Pro';
+  }
+
+  return 'Pro';
 }
 
 function openCheckout(url: string | undefined, setStatus: (status: string) => void) {
@@ -122,10 +152,10 @@ function Upgrade() {
               Local-first X bookmark management
             </div>
             <h1 className="mt-5 max-w-3xl text-4xl font-semibold tracking-normal text-foreground sm:text-5xl">
-              Upgrade BookmarkNest when your X bookmarks become a real library.
+              Upgrade BookmarkNest when your X bookmarks become working research.
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-              Free is enough to try the workflow. Pro removes the 200-bookmark management limit and unlocks exports and bulk actions for serious X research.
+              Free keeps the full library readable and organized. Pro adds saved views, notes, exports, and sync for serious X research.
             </p>
           </div>
           <div className="rounded-app border border-border bg-surface p-4 shadow-sm">
@@ -184,7 +214,7 @@ function Upgrade() {
           />
         </section>
 
-        <section className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+        <section className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">
           <div className="rounded-app border border-border bg-surface p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-lg font-semibold">Built for these Pro workflows</h2>
@@ -194,76 +224,30 @@ function Upgrade() {
                 <PromisePill icon={<CalendarClock size={14} />} text="Cancel anytime" />
               </div>
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <div className="mt-5 grid gap-x-6 gap-y-1 sm:grid-cols-2">
               {workflows.map((item) => (
-                <div key={item.title} className="rounded-app border border-border bg-background p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
-                      <Check size={15} />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold">{item.title}</h3>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.description}</p>
-                    </div>
+                <div key={item.title} className="flex items-start gap-3 border-t border-border/70 py-4">
+                  <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+                    <Check size={16} />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold">{item.title}</h3>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.description}</p>
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          <div className="rounded-app border border-border bg-surface p-5 shadow-sm">
-            <h2 className="text-lg font-semibold">{license.pro ? 'License active' : 'Activate license'}</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              After payment, copy your License Key from the Creem success page or order email, then activate it here.
-            </p>
-            {license.pro ? (
-              <div className="mt-4 space-y-3">
-                <div className="rounded-app border border-primary/20 bg-primary/5 p-3 text-sm">
-                  <div className="font-semibold text-primary">Pro activated</div>
-                  {license.email ? <div className="mt-1 text-muted-foreground">Email: {license.email}</div> : null}
-                  {license.activatedAt ? <div className="mt-1 text-muted-foreground">Activated: {formatDate(license.activatedAt)}</div> : null}
-                  <div className="mt-1 text-muted-foreground">Validation: {license.validationStatus}</div>
-                </div>
-                <Button variant="ghost" onClick={() => void handleDeactivate()} disabled={busy}>
-                  Deactivate device
-                </Button>
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                <label className="block text-sm">
-                  <span className="font-medium">License key</span>
-                  <input
-                    className="mt-2 h-11 w-full rounded-app border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
-                    value={licenseKey}
-                    onChange={(event) => setLicenseKey(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        void handleActivate();
-                      }
-                    }}
-                    placeholder="XXXX-XXXX-XXXX"
-                  />
-                </label>
-                <Button variant="primary" className="w-full" onClick={() => void handleActivate()} disabled={busy || !licenseKey.trim()}>
-                  <KeyRound size={16} />
-                  {busy ? 'Verifying...' : 'Activate Pro'}
-                </Button>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  One License Key can activate up to 3 devices. Deactivate here before switching devices to free a slot.
-                </p>
-              </div>
-            )}
-            {status ? <p className="mt-3 text-sm text-muted-foreground">{status}</p> : null}
-            <div className="mt-5 rounded-app border border-border bg-background p-3 text-sm">
-              <div className="flex items-center gap-2 font-medium">
-                <Mail size={15} className="text-primary" />
-                Purchase or activation issue?
-              </div>
-              <a className="mt-1 block text-primary hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
-                {SUPPORT_EMAIL}
-              </a>
-            </div>
-          </div>
+          <LicensePanel
+            license={license}
+            licenseKey={licenseKey}
+            setLicenseKey={setLicenseKey}
+            busy={busy}
+            status={status}
+            onActivate={handleActivate}
+            onDeactivate={handleDeactivate}
+          />
         </section>
       </div>
     </main>
@@ -289,6 +273,113 @@ function PromisePill({ icon, text }: { icon: ReactNode; text: string }) {
       <span className="text-primary">{icon}</span>
       {text}
     </span>
+  );
+}
+
+interface LicensePanelProps {
+  license: LicenseData;
+  licenseKey: string;
+  setLicenseKey: (value: string) => void;
+  busy: boolean;
+  status: string | null;
+  onActivate: () => Promise<void>;
+  onDeactivate: () => Promise<void>;
+}
+
+function LicensePanel({ license, licenseKey, setLicenseKey, busy, status, onActivate, onDeactivate }: LicensePanelProps) {
+  const planLabel = getLicensePlanLabel(license);
+
+  return (
+    <div className="rounded-app border border-border bg-surface p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">{license.pro ? 'License active' : 'Activate license'}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {license.pro
+              ? `This browser is using one activation slot for ${planLabel}.`
+              : 'Paste the License Key from your Creem success page or order email.'}
+          </p>
+        </div>
+        <span
+          className={
+            license.pro
+              ? 'inline-flex items-center gap-1.5 rounded-app border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary'
+              : 'inline-flex items-center gap-1.5 rounded-app border border-border bg-background px-2.5 py-1 text-xs font-semibold text-muted-foreground'
+          }
+        >
+          {license.pro ? <BadgeCheck size={14} /> : <KeyRound size={14} />}
+          {license.pro ? 'Active' : 'Inactive'}
+        </span>
+      </div>
+
+      {license.pro ? (
+        <div className="mt-5 space-y-4">
+          <div className="rounded-app border border-primary/25 bg-primary/[0.06] p-4 text-sm">
+            <LicenseMetaRow label="Plan" value={planLabel} strong />
+            <LicenseMetaRow label="Status" value="Pro enabled" />
+            {license.email ? <LicenseMetaRow label="Email" value={license.email} /> : null}
+            {license.activatedAt ? <LicenseMetaRow label="Activated" value={formatDate(license.activatedAt)} /> : null}
+            <LicenseMetaRow label="Expires" value={license.expiresAt ? formatDate(license.expiresAt) : 'Never'} />
+            <LicenseMetaRow label="Validation" value={license.validationStatus} />
+          </div>
+          <div className="rounded-app border border-border bg-background p-4">
+            <h3 className="text-sm font-semibold">Device activation</h3>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              One License Key can activate up to 3 devices. Deactivate this device before switching to free a slot.
+            </p>
+            <Button variant="danger" className="mt-4 w-full" onClick={() => void onDeactivate()} disabled={busy}>
+              <Power size={16} />
+              {busy ? 'Deactivating...' : 'Deactivate device'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-5 space-y-4">
+          <label className="block text-sm">
+            <span className="font-medium">License key</span>
+            <input
+              className="mt-2 h-11 w-full rounded-app border border-border bg-background px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/15"
+              value={licenseKey}
+              onChange={(event) => setLicenseKey(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  void onActivate();
+                }
+              }}
+              placeholder="XXXX-XXXX-XXXX"
+            />
+          </label>
+          <Button variant="primary" className="w-full" onClick={() => void onActivate()} disabled={busy || !licenseKey.trim()}>
+            <KeyRound size={16} />
+            {busy ? 'Verifying...' : 'Activate Pro'}
+          </Button>
+          <p className="text-xs leading-5 text-muted-foreground">
+            One License Key can activate up to 3 devices. Deactivate a device before switching to free a slot.
+          </p>
+        </div>
+      )}
+
+      {status ? <p className="mt-4 rounded-app border border-border bg-background px-3 py-2 text-sm text-muted-foreground">{status}</p> : null}
+
+      <div className="mt-5 border-t border-border pt-4 text-sm">
+        <div className="flex items-center gap-2 font-medium">
+          <Mail size={15} className="text-primary" />
+          Purchase or activation issue?
+        </div>
+        <a className="mt-1 block text-primary hover:underline" href={`mailto:${SUPPORT_EMAIL}`}>
+          {SUPPORT_EMAIL}
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function LicenseMetaRow({ label, value, strong = false }: { label: string; value?: string; strong?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-primary/10 py-2 first:pt-0 last:border-b-0 last:pb-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={strong ? 'font-semibold text-primary' : 'min-w-0 truncate font-medium text-foreground'}>{value}</span>
+    </div>
   );
 }
 

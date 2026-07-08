@@ -18,6 +18,7 @@ export const emptyLicenseData: LicenseData = {
   licenseKey: '',
   instanceId: '',
   email: '',
+  plan: 'unknown',
   activatedAt: null,
   expiresAt: null,
   lastValidatedAt: null,
