@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 
 import type { SearchMatch } from '../../lib/search/searchBookmarks';
 import { BookmarkCard } from './BookmarkCard';
@@ -18,13 +18,15 @@ interface BookmarkListProps {
   onMove: (bookmarkId: string) => void;
   onTag: (bookmarkId: string) => void;
   onRemoveTag: (bookmarkId: string) => void;
+  onAuthor: (authorHandle: string) => void;
+  onToggleExportQueue: (bookmarkId: string, markedForExport: boolean) => void;
   selectedIds: Set<string>;
   onSelectedChange: (bookmarkId: string, selected: boolean) => void;
 }
 
 const PAGE_SIZE = 120;
 
-export function BookmarkList({
+function BookmarkListView({
   matches,
   totalCount,
   loading,
@@ -38,6 +40,8 @@ export function BookmarkList({
   onMove,
   onTag,
   onRemoveTag,
+  onAuthor,
+  onToggleExportQueue,
   selectedIds,
   onSelectedChange
 }: BookmarkListProps) {
@@ -56,23 +60,33 @@ export function BookmarkList({
   }, [focusedIndex, visibleLimit]);
 
   if (loading) {
-    return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">Loading bookmarks...</div>;
+    return (
+      <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">
+        Loading bookmarks...
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-danger">{error}</div>;
+    return (
+      <div className="flex min-h-[460px] items-center justify-center p-8">
+        <div className="max-w-md border border-danger/25 bg-danger/5 px-6 py-5 text-sm text-danger">
+          {error}
+        </div>
+      </div>
+    );
   }
 
   if (matches.length === 0) {
     const isFilteredEmpty = totalCount > 0 || hasSearchQuery;
     return (
       <div className="flex min-h-[460px] items-center justify-center p-8">
-        <div className="max-w-sm border border-dashed border-border bg-background/60 px-6 py-8 text-center">
-          <p className="text-sm font-medium text-foreground">{isFilteredEmpty ? 'No matching bookmarks' : 'No bookmarks yet'}</p>
+        <div className="max-w-md border border-dashed border-border bg-background/65 px-6 py-8 text-center">
+          <p className="text-sm font-semibold text-foreground">{isFilteredEmpty ? 'No bookmarks in this view' : 'No bookmarks imported yet'}</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             {isFilteredEmpty
-              ? 'Clear the search or switch filters to see more saved bookmarks.'
-              : 'Open X bookmarks in Chrome, let the page load, then import the currently loaded items.'}
+              ? 'Clear search, switch focus, or open a different saved view to broaden the result set.'
+              : 'Open your X bookmarks page in Chrome, let the list load, then import the loaded items into this local library.'}
           </p>
         </div>
       </div>
@@ -94,6 +108,8 @@ export function BookmarkList({
           onMove={onMove}
           onTag={onTag}
           onRemoveTag={onRemoveTag}
+          onAuthor={onAuthor}
+          onToggleExportQueue={onToggleExportQueue}
           selected={selectedIds.has(bookmark.id)}
           onSelectedChange={onSelectedChange}
         />
@@ -106,3 +122,14 @@ export function BookmarkList({
     </div>
   );
 }
+
+export const BookmarkList = memo(BookmarkListView, (prev, next) =>
+  prev.matches === next.matches &&
+  prev.totalCount === next.totalCount &&
+  prev.loading === next.loading &&
+  prev.error === next.error &&
+  prev.hasSearchQuery === next.hasSearchQuery &&
+  prev.focusedIndex === next.focusedIndex &&
+  prev.activeBookmarkId === next.activeBookmarkId &&
+  prev.selectedIds === next.selectedIds
+);

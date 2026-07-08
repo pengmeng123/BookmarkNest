@@ -1,5 +1,5 @@
 import '../lib/utils/translateGuard';
-import { AlertTriangle, Download, KeyRound, LoaderCircle, Trash2, Upload } from 'lucide-react';
+import { AlertTriangle, Download, KeyRound, LoaderCircle, ShieldCheck, Trash2, Upload } from 'lucide-react';
 import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -14,8 +14,8 @@ import { downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
 import { deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import { emptyLicenseData, getSettings, saveSettings } from '../lib/storage/localStorage';
-import type { ImportDiagnostics, LicenseData } from '../shared/types';
+import { emptyLicenseData, getLastBackupStatus, getSettings, saveSettings, setLastBackupStatus } from '../lib/storage/localStorage';
+import type { ImportDiagnostics, LastBackupStatus, LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
 type Status = { type: 'success' | 'error'; message: string } | null;
@@ -26,6 +26,19 @@ function formatDate(value: string | null) {
   }
 
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(new Date(value));
+}
+
+function formatBackupDate(timestamp?: number) {
+  if (!timestamp) {
+    return 'Never backed up';
+  }
+
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
+}
+
+function backupFilename(timestamp: number) {
+  const compactTimestamp = new Date(timestamp).toISOString().slice(0, 16).replaceAll('-', '').replaceAll(':', '').replace('T', '-');
+  return `bookmarknest-backup-${compactTimestamp}.json`;
 }
 
 function getLicensePlanLabel(license: LicenseData) {
@@ -67,6 +80,7 @@ function Options() {
   const [syncInterval, setSyncInterval] = useState(60);
   const [mirrorRemovals, setMirrorRemovals] = useState(false);
   const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
+  const [lastBackup, setLastBackup] = useState<LastBackupStatus | null>(null);
   const [licenseBusy, setLicenseBusy] = useState(false);
   const [versionClicks, setVersionClicks] = useState(0);
   const showDiagnostics = versionClicks >= 5;
@@ -91,6 +105,7 @@ function Options() {
       setMirrorRemovals(s.mirrorRemovals);
     });
     void validateStoredLicenseIfNeeded().then(setLicense);
+    void getLastBackupStatus().then(setLastBackup);
   }, []);
 
   async function handleExportBackup() {
@@ -102,9 +117,17 @@ function Options() {
     setStatus(null);
     try {
       const backup = await exportLocalBackup();
-      const date = new Date(backup.exportedAt).toISOString().slice(0, 10);
-      await downloadText(`bookmarknest-backup-${date}.json`, JSON.stringify(backup, null, 2), 'application/json;charset=utf-8');
-      setStatus({ type: 'success', message: 'Backup exported.' });
+      const filename = backupFilename(backup.exportedAt);
+      await downloadText(filename, JSON.stringify(backup, null, 2), 'application/json;charset=utf-8');
+      const nextBackupStatus: LastBackupStatus = {
+        at: backup.exportedAt,
+        bookmarkCount: backup.bookmarks.length,
+        savedViewCount: backup.savedViews.length,
+        filename
+      };
+      await setLastBackupStatus(nextBackupStatus);
+      setLastBackup(nextBackupStatus);
+      setStatus({ type: 'success', message: `Backup exported: ${filename}` });
     } catch (error) {
       setStatus({ type: 'error', message: error instanceof Error ? error.message : 'Backup export failed.' });
     } finally {
@@ -289,7 +312,19 @@ function Options() {
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>
-          <p className="mt-2 text-sm text-muted-foreground">Export, restore, or clear the local BookmarkNest library.</p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Export, restore, or clear the local BookmarkNest library. Chrome removes extension data from this browser when the extension is uninstalled.
+          </p>
+          <div className="mt-3 border border-accent/25 bg-accent/10 px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2 font-medium text-foreground">
+              <ShieldCheck size={15} className="text-accent" />
+              <span>Safety backup</span>
+              <span className="text-xs font-normal text-muted-foreground">{formatBackupDate(lastBackup?.at)}</span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Keep the downloaded backup file before reinstalling, switching browsers, or clearing local data. It includes bookmarks, folders, tags, notes, saved views, and import history.
+            </p>
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void handleExportBackup()} disabled={Boolean(busyAction)}>
               {busyAction === 'export' ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
@@ -377,7 +412,7 @@ function Options() {
       <Dialog
         open={confirmClearOpen}
         title="Clear local data?"
-        description="This removes all local bookmarks, folders, tags, and import history from this browser."
+        description="This removes all local bookmarks, folders, tags, notes, saved views, and import history from this browser."
         onClose={() => {
           if (!busyAction) {
             setConfirmClearOpen(false);
@@ -397,7 +432,7 @@ function Options() {
         }
       >
         <div className="rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-muted-foreground">
-          Export a backup first if you may need to restore this library later.
+          Export a backup first if you may need to restore this library later. Uninstalling the extension has the same local data risk.
         </div>
       </Dialog>
     </PageShell>

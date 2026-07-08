@@ -13,7 +13,8 @@ export function isProActive(license: LicenseData) {
   return license.pro && (license.validationStatus === 'valid' || license.validationStatus === 'offline');
 }
 
-export function canUseCapability(license: LicenseData, capability: ProCapability) {
+export function canUseCapability(license: LicenseData, _capability: ProCapability) {
+  void _capability;
   return isProActive(license);
 }
 

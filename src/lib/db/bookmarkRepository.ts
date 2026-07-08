@@ -137,6 +137,14 @@ export async function updateBookmarkNote(bookmarkId: string, note: string) {
   });
 }
 
+export async function setBookmarkMarkedForExport(bookmarkId: string, markedForExport: boolean) {
+  await db.bookmarks.update(bookmarkId, {
+    markedForExport,
+    exportMarkedAt: markedForExport ? Date.now() : undefined,
+    updatedAt: Date.now()
+  });
+}
+
 export async function softDeleteBookmark(bookmarkId: string) {
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
     const bookmark = await db.bookmarks.get(bookmarkId);
@@ -504,6 +512,7 @@ export interface BookmarkCounts {
   uncategorized: number;
   archived: number;
   withNotes: number;
+  exportQueue: number;
   byFolder: Record<string, number>;
 }
 
@@ -513,9 +522,13 @@ export async function getBookmarkCounts(): Promise<BookmarkCounts> {
   const byFolder: Record<string, number> = {};
   let uncategorized = 0;
   let withNotes = 0;
+  let exportQueue = 0;
   for (const b of active) {
     if (b.note?.trim()) {
       withNotes += 1;
+    }
+    if (b.markedForExport) {
+      exportQueue += 1;
     }
     if (b.folderId) {
       byFolder[b.folderId] = (byFolder[b.folderId] ?? 0) + 1;
@@ -528,6 +541,7 @@ export async function getBookmarkCounts(): Promise<BookmarkCounts> {
     uncategorized,
     archived: bookmarks.length - active.length,
     withNotes,
+    exportQueue,
     byFolder
   };
 }
@@ -557,6 +571,8 @@ export async function createSavedView(input: Omit<SavedView, 'id' | 'createdAt' 
     name: input.name,
     query: input.query,
     sortKey: input.sortKey,
+    focus: input.focus ?? 'all',
+    authorQuery: input.authorQuery?.trim() ?? '',
     folderId: input.folderId ?? null,
     tagId: input.tagId ?? null,
     includeArchived: input.includeArchived,

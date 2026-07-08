@@ -4,29 +4,36 @@ import {
   BookMarked,
   ChevronRight,
   ChevronsUpDown,
+  Download,
   ExternalLink,
   FileJson,
   FileSpreadsheet,
   FileText,
+  Filter,
   Folder,
   Inbox,
   LoaderCircle,
   Lock,
+  MoreHorizontal,
   Moon,
+  PackageOpen,
   Pencil,
   Plus,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
   Tags,
   Trash2,
   ArrowUp,
   Upload,
+  UserRound,
   Waypoints,
   X
 } from 'lucide-react';
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, StrictMode, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
@@ -51,22 +58,25 @@ import {
   restoreFolder,
   restoreTag,
   setBookmarkArchived,
+  setBookmarkMarkedForExport,
   softDeleteBookmark,
   updateBookmarkNote,
   updateSavedView,
+  exportLocalBackup,
   type BookmarkListFilters,
   type BookmarkListItem
 } from '../lib/db/bookmarkRepository';
-import { downloadBookmarks } from '../lib/export/download';
+import { getBookmarkSignals } from '../lib/bookmarks/metadata';
+import { downloadBookmarks, downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import { searchBookmarks, type SortKey } from '../lib/search/searchBookmarks';
+import { getLastBackupStatus, setLastBackupStatus } from '../lib/storage/localStorage';
 import { cn } from '../lib/utils/cn';
-import type { ImportSession, SavedView } from '../shared/types';
+import type { BookmarkFocusFilter, ImportSession, LastBackupStatus, SavedView } from '../shared/types';
 import '../styles/globals.css';
 import { BookmarkList } from './components/BookmarkList';
 import { MoveDialog } from './components/MoveDialog';
-import { useDebouncedValue } from './hooks/useDebouncedValue';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLibraryData } from './hooks/useLibraryData';
 import { useLicenseState } from './hooks/useLicenseState';
@@ -89,6 +99,32 @@ type ConfirmDialogState =
 type TagDialogState = { kind: 'add' | 'remove'; bookmarkIds: string[]; bookmarkId?: string } | null;
 type ImportStatus = { type: 'loading' | 'success' | 'error'; message: string } | null;
 type ActionToast = { type: 'success' | 'error'; message: string; onUndo?: () => Promise<void> } | null;
+type AppExportFormat = 'json' | 'markdown' | 'csv' | 'research-pack';
+type ResearchViewState = {
+  query: string;
+  sortKey: SortKey;
+  folderId: FolderFilter;
+  tagId: string | null | undefined;
+  includeArchived: boolean;
+  focus: BookmarkFocusFilter;
+  authorQuery: string;
+};
+
+const focusOptions: { value: BookmarkFocusFilter; label: string }[] = [
+  { value: 'all', label: 'All evidence' },
+  { value: 'with-notes', label: 'Has notes' },
+  { value: 'without-notes', label: 'Needs notes' },
+  { value: 'with-media', label: 'Has media' },
+  { value: 'unfiled', label: 'Unfiled' },
+  { value: 'export-queue', label: 'Export list' }
+];
+
+const savedViewTemplates: Array<Pick<SavedView, 'name' | 'query' | 'sortKey' | 'focus' | 'authorQuery' | 'folderId' | 'tagId' | 'includeArchived'>> = [
+  { name: 'Needs notes', query: '', sortKey: 'source', focus: 'without-notes', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
+  { name: 'Media references', query: '', sortKey: 'source', focus: 'with-media', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
+  { name: 'Unfiled inbox', query: '', sortKey: 'source', focus: 'unfiled', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
+  { name: 'Export list', query: '', sortKey: 'source', focus: 'export-queue', authorQuery: '', folderId: null, tagId: null, includeArchived: false }
+];
 
 function formatImportError(error?: string) {
   if (!error) {
@@ -110,27 +146,177 @@ function formatShortDate(timestamp?: number) {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium' }).format(timestamp);
 }
 
-function matchesSavedView(savedView: SavedView | undefined, state: { query: string; sortKey: SortKey; folderId: FolderFilter; tagId: string | null | undefined; includeArchived: boolean }) {
+function formatBackupDate(timestamp?: number) {
+  if (!timestamp) {
+    return 'Never backed up';
+  }
+
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
+}
+
+function backupFilename(timestamp: number) {
+  const compactTimestamp = new Date(timestamp).toISOString().slice(0, 16).replaceAll('-', '').replaceAll(':', '').replace('T', '-');
+  return `bookmarknest-backup-${compactTimestamp}.json`;
+}
+
+function normalizeAuthorQuery(value: string) {
+  return value.normalize('NFC').toLowerCase().replace(/^@/, '').trim();
+}
+
+function savedViewState(savedView: SavedView): ResearchViewState {
+  return {
+    query: savedView.query,
+    sortKey: savedView.sortKey,
+    folderId: savedView.folderId ?? undefined,
+    tagId: savedView.tagId ?? undefined,
+    includeArchived: savedView.includeArchived,
+    focus: savedView.focus ?? 'all',
+    authorQuery: savedView.authorQuery ?? ''
+  };
+}
+
+function matchesSavedView(savedView: SavedView | undefined, state: ResearchViewState) {
   if (!savedView) {
     return false;
   }
 
+  const saved = savedViewState(savedView);
   return (
-    savedView.query === state.query &&
-    savedView.sortKey === state.sortKey &&
-    (savedView.folderId ?? null) === (state.folderId ?? null) &&
-    (savedView.tagId ?? null) === (state.tagId ?? null) &&
-    savedView.includeArchived === state.includeArchived
+    saved.query === state.query &&
+    saved.sortKey === state.sortKey &&
+    (saved.folderId ?? null) === (state.folderId ?? null) &&
+    (saved.tagId ?? null) === (state.tagId ?? null) &&
+    saved.includeArchived === state.includeArchived &&
+    saved.focus === state.focus &&
+    normalizeAuthorQuery(saved.authorQuery) === normalizeAuthorQuery(state.authorQuery)
   );
 }
+
+function bookmarkMatchesFocus(bookmark: BookmarkListItem, focus: BookmarkFocusFilter) {
+  if (focus === 'with-notes') {
+    return Boolean(bookmark.note?.trim());
+  }
+  if (focus === 'without-notes') {
+    return !bookmark.note?.trim();
+  }
+  if (focus === 'with-media') {
+    return bookmark.mediaUrls.length > 0;
+  }
+  if (focus === 'unfiled') {
+    return !bookmark.folderId;
+  }
+  if (focus === 'export-queue') {
+    return Boolean(bookmark.markedForExport);
+  }
+  return true;
+}
+
+function bookmarkMatchesResearchView(bookmark: BookmarkListItem, state: ResearchViewState) {
+  if (state.includeArchived ? !bookmark.archived : bookmark.archived) {
+    return false;
+  }
+  if (state.folderId === null && bookmark.folderId) {
+    return false;
+  }
+  if (state.folderId && bookmark.folderId !== state.folderId) {
+    return false;
+  }
+  if (state.tagId && !bookmark.tagIds.includes(state.tagId)) {
+    return false;
+  }
+  if (!bookmarkMatchesFocus(bookmark, state.focus)) {
+    return false;
+  }
+
+  const authorQuery = normalizeAuthorQuery(state.authorQuery);
+  if (!authorQuery) {
+    return true;
+  }
+
+  const authorText = `${bookmark.authorName} ${bookmark.authorHandle}`.normalize('NFC').toLowerCase();
+  return authorText.includes(authorQuery);
+}
+
+const DebouncedFilterInput = forwardRef<
+  HTMLInputElement,
+  {
+    value: string;
+    onCommit: (value: string) => void;
+    placeholder: string;
+    ariaLabel: string;
+    containerClassName: string;
+    inputClassName?: string;
+    icon?: ReactNode;
+    label?: string;
+    delayMs?: number;
+  }
+>(function DebouncedFilterInput(
+  {
+    value,
+    onCommit,
+    placeholder,
+    ariaLabel,
+    containerClassName,
+    inputClassName,
+    icon,
+    label,
+    delayMs = 180
+  },
+  ref
+) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (draft === value) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => onCommit(draft), delayMs);
+    return () => window.clearTimeout(timeoutId);
+  }, [draft, value, onCommit, delayMs]);
+
+  return (
+    <label className={containerClassName}>
+      {icon}
+      {label ? <span className="shrink-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">{label}</span> : null}
+      <input
+        ref={ref}
+        className={inputClassName ?? 'min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground'}
+        placeholder={placeholder}
+        aria-label={ariaLabel}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+      />
+      {draft ? (
+        <button
+          type="button"
+          className="grid h-7 w-7 place-items-center text-muted-foreground hover:bg-muted hover:text-foreground"
+          aria-label={`Clear ${ariaLabel.toLowerCase()}`}
+          onClick={() => {
+            setDraft('');
+            onCommit('');
+          }}
+        >
+          <X size={15} />
+        </button>
+      ) : null}
+    </label>
+  );
+});
 
 function AppSidebar({
   folders,
   tags,
   counts,
+  focusFilter,
   activeFolderId,
   activeTagId,
   includeArchived,
+  onFocusChange,
   onFolderChange,
   onTagChange,
   onArchivedChange,
@@ -142,10 +328,12 @@ function AppSidebar({
 }: {
   folders: { id: string; name: string }[];
   tags: { id: string; name: string; usageCount: number; color: string }[];
-  counts: { total: number; uncategorized: number; archived: number; withNotes: number; byFolder: Record<string, number> };
+  counts: { total: number; uncategorized: number; archived: number; withNotes: number; exportQueue: number; byFolder: Record<string, number> };
+  focusFilter: BookmarkFocusFilter;
   activeFolderId: FolderFilter;
   activeTagId?: string | null;
   includeArchived: boolean;
+  onFocusChange: (focus: BookmarkFocusFilter) => void;
   onFolderChange: (folderId: FolderFilter) => void;
   onTagChange: (tagId?: string | null) => void;
   onArchivedChange: (includeArchived: boolean) => void;
@@ -155,6 +343,12 @@ function AppSidebar({
   onDeleteFolder: (folderId: string) => void;
   onDeleteTag: (tagId: string) => void;
 }) {
+  const laneCardClass = (active: boolean) =>
+    cn(
+      'border border-border/70 bg-background/80 px-3 py-2 text-left transition hover:bg-background',
+      active && 'border-accent/55 bg-accent/10 shadow-[inset_2px_0_0_0_rgba(125,91,22,0.95)]'
+    );
+
   const navItemClass = (active: boolean) =>
     cn(
       'flex w-full items-center gap-2 border-b border-border/60 px-3 py-2.5 text-left text-sm text-muted-foreground transition hover:bg-background/50 hover:text-foreground',
@@ -162,17 +356,50 @@ function AppSidebar({
     );
 
   return (
-    <aside className="border-r border-border bg-[#eaf1ef] dark:bg-[#101816]">
+    <aside className="h-full border-b border-border bg-[#eaf1ef] dark:bg-[#101816] lg:sticky lg:top-0 lg:min-h-[calc(100vh-140px)] lg:border-b-0 lg:border-r lg:max-h-screen lg:overflow-y-auto">
       <div className="border-b border-border/70 px-4 py-4">
         <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Research lanes</p>
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-          <div className="border border-border/70 bg-background/80 px-3 py-2">
-            <div className="text-muted-foreground">Library</div>
+        <div className="mt-3 grid gap-2 text-xs">
+          <button
+            className={laneCardClass(focusFilter === 'all')}
+            onClick={(event) => {
+              event.currentTarget.blur();
+              onFocusChange('all');
+            }}
+          >
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Inbox size={14} />
+              <span>Library</span>
+            </div>
             <div className="mt-1 text-lg font-semibold text-foreground">{counts.total}</div>
-          </div>
-          <div className="border border-border/70 bg-background/80 px-3 py-2">
-            <div className="text-muted-foreground">With notes</div>
-            <div className="mt-1 text-lg font-semibold text-foreground">{counts.withNotes}</div>
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className={laneCardClass(focusFilter === 'without-notes')}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                onFocusChange('without-notes');
+              }}
+            >
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Sparkles size={14} />
+                <span>Needs notes</span>
+              </div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{Math.max(0, counts.total - counts.withNotes)}</div>
+            </button>
+            <button
+              className={laneCardClass(focusFilter === 'export-queue')}
+              onClick={(event) => {
+                event.currentTarget.blur();
+                onFocusChange('export-queue');
+              }}
+            >
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <PackageOpen size={14} />
+                <span>Export</span>
+              </div>
+              <div className="mt-1 text-lg font-semibold text-foreground">{counts.exportQueue}</div>
+            </button>
           </div>
         </div>
       </div>
@@ -258,16 +485,24 @@ function AppSidebar({
 function SavedViewRail({
   views,
   activeViewId,
+  viewCounts,
+  activeViewDirty,
   canManage,
   onCreate,
+  onCreateTemplates,
+  onUpdate,
   onApply,
   onRename,
   onDelete
 }: {
   views: SavedView[];
   activeViewId: string | null;
+  viewCounts: Record<string, number>;
+  activeViewDirty: boolean;
   canManage: boolean;
   onCreate: () => void;
+  onCreateTemplates: () => void;
+  onUpdate: () => void;
   onApply: (savedView: SavedView) => void;
   onRename: (savedView: SavedView) => void;
   onDelete: (savedView: SavedView) => void;
@@ -275,129 +510,363 @@ function SavedViewRail({
   return (
     <div className="border-b border-border/70 bg-[#f2f7f5] px-4 py-3 dark:bg-[#101816]">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="mr-2 inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+        <div className="mr-auto inline-flex items-center gap-2 text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
           <Waypoints size={14} />
           Saved views
+          {views.length ? <span className="text-[10px] tracking-[0.18em]">{views.length}</span> : null}
         </div>
+        {!canManage ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Lock size={12} />Pro</span> : null}
         {views.length === 0 ? (
-          <span className="text-sm text-muted-foreground">No saved views yet.</span>
-        ) : null}
-        {views.map((savedView) => {
-          const active = activeViewId === savedView.id;
-          return (
-            <div key={savedView.id} className={cn('inline-flex items-center border bg-background/90', active ? 'border-accent text-foreground' : 'border-border text-muted-foreground')}>
-              <button className="px-3 py-2 text-sm hover:bg-background" onClick={() => onApply(savedView)}>
-                {savedView.name}
-              </button>
-              <div className="flex items-center border-l border-inherit">
-                <button className="grid h-9 w-9 place-items-center hover:bg-background" onClick={() => onRename(savedView)} aria-label={`Rename ${savedView.name}`}>
-                  <Pencil size={13} />
-                </button>
-                <button className="grid h-9 w-9 place-items-center hover:bg-background" onClick={() => onDelete(savedView)} aria-label={`Delete ${savedView.name}`}>
-                  <Trash2 size={13} />
-                </button>
-              </div>
-            </div>
-          );
-        })}
-        <div className="ml-auto flex items-center gap-2">
-          {!canManage ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Lock size={12} />Pro</span> : null}
-          <Button size="sm" variant="secondary" onClick={onCreate}>
-            <Plus size={14} />
-            Save view
+          <Button size="sm" variant="ghost" onClick={onCreateTemplates}>
+            <Sparkles size={14} />
+            Templates
           </Button>
-        </div>
+        ) : null}
+        {activeViewId && activeViewDirty ? (
+          <Button size="sm" variant="ghost" onClick={onUpdate}>
+            <Pencil size={14} />
+            Update view
+          </Button>
+        ) : null}
+        <Button size="sm" variant="secondary" onClick={onCreate}>
+          <Plus size={14} />
+          Save view
+        </Button>
       </div>
+      <div className="mt-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {views.length === 0 ? (
+          <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border border-dashed border-border/80 bg-background/50 px-3 py-2 text-sm text-muted-foreground">
+            <span>Save the current search and filters as a reusable research lane.</span>
+            <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={onCreateTemplates}>
+              Add starter templates
+            </button>
+          </div>
+        ) : (
+          <div className="flex min-w-max items-stretch gap-2 pr-2">
+            {views.map((savedView) => (
+              <SavedViewTab
+                key={savedView.id}
+                savedView={savedView}
+                active={activeViewId === savedView.id}
+                count={viewCounts[savedView.id] ?? 0}
+                dirty={activeViewId === savedView.id && activeViewDirty}
+                onApply={onApply}
+                onRename={onRename}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SavedViewTab({
+  savedView,
+  active,
+  count,
+  dirty,
+  onApply,
+  onRename,
+  onDelete
+}: {
+  savedView: SavedView;
+  active: boolean;
+  count: number;
+  dirty: boolean;
+  onApply: (savedView: SavedView) => void;
+  onRename: (savedView: SavedView) => void;
+  onDelete: (savedView: SavedView) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
+  const updateMenuPosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 170;
+    const viewportPadding = 12;
+    setMenuPosition({
+      top: rect.bottom + 4,
+      left: Math.min(Math.max(viewportPadding, rect.right - menuWidth), window.innerWidth - menuWidth - viewportPadding)
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!menuOpen) {
+      setMenuPosition(null);
+      return;
+    }
+
+    updateMenuPosition();
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setMenuOpen(false);
+      }
+    }
+
+    function handleLayoutChange() {
+      updateMenuPosition();
+    }
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleLayoutChange);
+    window.addEventListener('scroll', handleLayoutChange, true);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleLayoutChange);
+      window.removeEventListener('scroll', handleLayoutChange, true);
+    };
+  }, [menuOpen]);
+
+  const menu = menuOpen && menuPosition
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[2147483647] min-w-[170px] border border-border bg-surface p-1.5 shadow-xl"
+          style={{ top: menuPosition.top, left: menuPosition.left }}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-foreground hover:bg-muted"
+            onClick={() => {
+              setMenuOpen(false);
+              onRename(savedView);
+            }}
+          >
+            <Pencil size={14} />
+            Rename view
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-danger hover:bg-danger/5"
+            onClick={() => {
+              setMenuOpen(false);
+              onDelete(savedView);
+            }}
+          >
+            <Trash2 size={14} />
+            Delete view
+          </button>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div
+      className={cn(
+        'group relative inline-flex h-11 shrink-0 items-stretch overflow-visible border bg-background/92 transition',
+        active
+          ? 'border-accent/60 bg-[#fbf8f1] text-foreground shadow-[inset_0_-2px_0_0_rgba(125,91,22,0.92)] dark:bg-[#1a1812]'
+          : 'border-border text-muted-foreground hover:border-primary/25 hover:bg-background'
+      )}
+    >
+      <button
+        className="flex min-w-0 max-w-[250px] items-center gap-2 py-0 pl-3 pr-9 text-left"
+        onClick={() => onApply(savedView)}
+        title={savedView.name}
+      >
+        <span className="truncate text-sm font-medium">{savedView.name}</span>
+        <span className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground">
+          {count}
+        </span>
+        {dirty ? <span className="text-[11px] font-medium text-accent">Edited</span> : null}
+      </button>
+      <div ref={triggerRef} className="absolute right-1 top-1/2 z-10 -translate-y-1/2">
+        <button
+          className={cn(
+            'grid h-8 w-8 place-items-center bg-background/90 text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground focus:opacity-100',
+            menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+          )}
+          onClick={() => setMenuOpen((current) => !current)}
+          aria-label={`More actions for ${savedView.name}`}
+          aria-expanded={menuOpen}
+          title="More actions"
+        >
+          <MoreHorizontal size={15} />
+        </button>
+      </div>
+      {menu}
     </div>
   );
 }
 
 function BookmarkInspector({
   bookmark,
-  noteDraft,
-  noteDirty,
   noteBusy,
   noteStatus,
   canEditNotes,
-  onNoteChange,
   onSaveNote,
+  onAuthorView,
+  onToggleExportQueue,
   onUpgrade
 }: {
   bookmark?: BookmarkListItem;
-  noteDraft: string;
-  noteDirty: boolean;
   noteBusy: boolean;
   noteStatus: string | null;
   canEditNotes: boolean;
-  onNoteChange: (value: string) => void;
-  onSaveNote: () => void;
+  onSaveNote: (value: string) => void;
+  onAuthorView: (authorHandle: string) => void;
+  onToggleExportQueue: (bookmarkId: string, markedForExport: boolean) => void;
   onUpgrade: () => void;
 }) {
   const shellClass =
-    'border-l border-border bg-[#f7faf9] dark:bg-[#0f1514] lg:sticky lg:top-0 lg:self-start lg:max-h-screen lg:overflow-y-auto';
+    'border-t border-border bg-[#f7faf9] dark:bg-[#0f1514] lg:col-span-2 xl:col-span-1 xl:sticky xl:top-0 xl:min-h-[calc(100vh-140px)] xl:max-h-screen xl:overflow-y-auto xl:border-l xl:border-t-0';
+  const [noteDraft, setNoteDraft] = useState(bookmark?.note ?? '');
+
+  useEffect(() => {
+    setNoteDraft(bookmark?.note ?? '');
+  }, [bookmark?.id, bookmark?.note]);
+
+  const noteDirty = (bookmark?.note ?? '') !== noteDraft;
 
   if (!bookmark) {
     return (
       <aside className={shellClass}>
         <div className="border-b border-border/70 bg-[#eef5f3] px-5 py-4 dark:bg-[#111c1a]">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Inspector</p>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Details</p>
         </div>
-        <div className="px-5 py-6">
-          <div className="max-w-xs">
-            <h2 className="text-lg font-semibold text-foreground">Open a bookmark</h2>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              Select any saved post to read its metadata, inspect tags, and keep research notes alongside the original bookmark.
+        <div className="px-5 py-5">
+          <div className="border border-dashed border-border/80 bg-background/55 p-4">
+            <div className="flex h-9 w-9 items-center justify-center bg-primary/10 text-primary">
+              <BookMarked size={17} />
+            </div>
+            <h2 className="mt-4 text-base font-semibold text-foreground">Select a bookmark</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Open a saved post to review source details, tags, notes, and export status.
             </p>
+          </div>
+          <div className="mt-4 grid gap-2 text-sm">
+            <div className="flex items-center gap-3 border border-border/70 bg-background/55 px-3 py-2.5 text-muted-foreground">
+              <UserRound size={15} />
+              Author and folder details
+            </div>
+            <div className="flex items-center gap-3 border border-border/70 bg-background/55 px-3 py-2.5 text-muted-foreground">
+              <FileText size={15} />
+              Research note
+            </div>
+            <div className="flex items-center gap-3 border border-border/70 bg-background/55 px-3 py-2.5 text-muted-foreground">
+              <PackageOpen size={15} />
+              Export list status
+            </div>
           </div>
         </div>
       </aside>
     );
   }
 
+  const signals = getBookmarkSignals(bookmark);
+
   return (
     <aside className={shellClass}>
       <div className="border-b border-border/70 bg-[#eef5f3] px-5 py-4 dark:bg-[#111c1a]">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Inspector</p>
+        <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Details</p>
       </div>
       <div className="px-5 py-5">
-        <div className="flex items-start gap-3 border-b border-border/70 pb-4">
-          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
-            {bookmark.authorAvatarUrl ? <img src={bookmark.authorAvatarUrl} alt="" className="h-full w-full object-cover" /> : null}
-          </div>
-          <div className="min-w-0">
-            <h2 className="truncate text-base font-semibold text-foreground">{bookmark.authorName}</h2>
-            <div className="mt-1 text-sm text-muted-foreground">@{bookmark.authorHandle}</div>
-            <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-              <span>{bookmark.folder?.name ?? 'Uncategorized'}</span>
-              {bookmark.createdAt ? <span>Posted {formatShortDate(bookmark.createdAt)}</span> : null}
-              <span>Imported {formatShortDate(bookmark.importedAt)}</span>
+        <div className="border-b border-border/70 pb-5">
+          <div className="flex items-start gap-3">
+            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-full border border-border bg-muted">
+              {bookmark.authorAvatarUrl ? <img src={bookmark.authorAvatarUrl} alt="" className="h-full w-full object-cover" /> : null}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="truncate text-base font-semibold text-foreground">{bookmark.authorName}</h2>
+                  <div className="mt-1 text-sm text-muted-foreground">@{bookmark.authorHandle}</div>
+                </div>
+                {bookmark.tweetUrl ? (
+                  <Button size="icon" variant="secondary" onClick={() => window.open(bookmark.tweetUrl, '_blank', 'noopener,noreferrer')} title="Open original post" aria-label="Open original post">
+                    <ExternalLink size={14} />
+                  </Button>
+                ) : null}
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <span>{bookmark.folder?.name ?? 'Uncategorized'}</span>
+                {bookmark.createdAt ? <span>Posted {formatShortDate(bookmark.createdAt)}</span> : null}
+                <span>Imported {formatShortDate(bookmark.importedAt)}</span>
+              </div>
+              {signals.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {signals.map((signal) => (
+                    <span key={signal.key} className="inline-flex items-center rounded-full bg-muted px-2 py-1 text-[11px] font-medium text-muted-foreground">
+                      {signal.label}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
 
-        <div className="mt-5">
-          <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Saved post</h3>
+        <div className="mt-5 border-b border-border/70 pb-5">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Saved post</h3>
+            {bookmark.authorHandle ? (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground transition hover:text-foreground"
+                onClick={() => onAuthorView(bookmark.authorHandle)}
+              >
+                <UserRound size={12} />
+                <span>View author</span>
+              </button>
+            ) : null}
+          </div>
           <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-foreground">{bookmark.contentText}</p>
         </div>
 
-        <div className="mt-6">
-          <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Research note</h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Keep the reason this bookmark matters next to the saved post.
-          </p>
+        <div className="mt-5 border-b border-border/70 pb-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Research note</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Keep the reason this bookmark matters next to the saved post.
+              </p>
+            </div>
+            {bookmark.noteUpdatedAt ? (
+              <span className="shrink-0 text-xs text-muted-foreground">Edited {formatShortDate(bookmark.noteUpdatedAt)}</span>
+            ) : null}
+          </div>
           <div className="mt-3">
             <TextareaInput
               value={noteDraft}
-              onChange={(event) => onNoteChange(event.target.value)}
+              onChange={(event) => setNoteDraft(event.target.value)}
               readOnly={!canEditNotes}
               disabled={noteBusy}
               placeholder="Summarize the angle, cite the insight, or note the follow-up."
               className={!canEditNotes ? 'cursor-not-allowed opacity-80' : ''}
             />
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-muted-foreground">
+              {noteStatus ? noteStatus : canEditNotes ? 'Stored locally in this browser.' : 'Notes stay visible, but editing is locked on Free.'}
+            </div>
             {canEditNotes ? (
-              <Button variant="primary" onClick={onSaveNote} disabled={noteBusy || !noteDirty}>
+              <Button variant="primary" onClick={() => onSaveNote(noteDraft)} disabled={noteBusy || !noteDirty}>
                 {noteBusy ? <LoaderCircle size={14} className="animate-spin" /> : <FileText size={14} />}
                 {noteBusy ? 'Saving...' : 'Save note'}
               </Button>
@@ -407,12 +876,14 @@ function BookmarkInspector({
                 Upgrade to save notes
               </Button>
             )}
-            {noteStatus ? <span className="text-xs text-muted-foreground">{noteStatus}</span> : null}
           </div>
         </div>
 
-        <div className="mt-6 border-t border-border/70 pt-5">
-          <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Tags</h3>
+        <div className="mt-5 border-b border-border/70 pb-5">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Tags</h3>
+            <span className="text-xs text-muted-foreground">{bookmark.tags.length}</span>
+          </div>
           <div className="mt-3 flex flex-wrap gap-2">
             {bookmark.tags.length > 0 ? (
               bookmark.tags.map((tag) => (
@@ -426,16 +897,235 @@ function BookmarkInspector({
           </div>
         </div>
 
-        {bookmark.tweetUrl ? (
-          <div className="mt-6">
-            <Button variant="secondary" onClick={() => window.open(bookmark.tweetUrl, '_blank', 'noopener,noreferrer')}>
-              <ExternalLink size={14} />
-              Open original post
+        <div className="mt-5">
+          <h3 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Actions</h3>
+          <div className="mt-3">
+            <Button variant={bookmark.markedForExport ? 'primary' : 'secondary'} className="justify-start" onClick={() => onToggleExportQueue(bookmark.id, !bookmark.markedForExport)}>
+              <PackageOpen size={14} />
+              {bookmark.markedForExport ? 'Remove export mark' : 'Mark for export'}
             </Button>
           </div>
-        ) : null}
+        </div>
       </div>
     </aside>
+  );
+}
+
+function DataSafetyBar({
+  bookmarkCount,
+  savedViewCount,
+  lastBackup,
+  backupBusy,
+  backupStatus,
+  onBackup,
+  onRestore
+}: {
+  bookmarkCount: number;
+  savedViewCount: number;
+  lastBackup: LastBackupStatus | null;
+  backupBusy: boolean;
+  backupStatus: ActionToast;
+  onBackup: () => void;
+  onRestore: () => void;
+}) {
+  const backupAgeMs = lastBackup ? Date.now() - lastBackup.at : Number.POSITIVE_INFINITY;
+  const stale = bookmarkCount > 0 && backupAgeMs > 7 * 24 * 60 * 60 * 1000;
+
+  if (lastBackup && !stale) {
+    return (
+      <div className="border-b border-border bg-[#eef5f3] px-4 py-2.5 text-sm dark:bg-[#101816]">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-primary">
+              <ShieldCheck size={13} />
+              Data safety
+            </span>
+            <span className="text-muted-foreground">Backed up {formatBackupDate(lastBackup.at)}</span>
+            <span className="text-xs text-muted-foreground">
+              {lastBackup.bookmarkCount} bookmarks, {lastBackup.savedViewCount} views
+            </span>
+            {backupStatus ? (
+              <span className={cn('text-xs', backupStatus.type === 'error' ? 'text-danger' : 'text-primary')}>{backupStatus.message}</span>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button size="xs" variant="ghost" onClick={onBackup} disabled={backupBusy || bookmarkCount === 0}>
+              {backupBusy ? <LoaderCircle size={13} className="animate-spin" /> : <Download size={13} />}
+              Backup
+            </Button>
+            <Button size="xs" variant="ghost" onClick={onRestore}>
+              Restore
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={cn('border-b border-border px-4 py-3', stale ? 'bg-[#fbf8f1] dark:bg-[#1a1710]' : 'bg-[#eef5f3] dark:bg-[#101816]')}>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={cn('inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-semibold', stale ? 'bg-accent/12 text-accent' : 'bg-primary/10 text-primary')}>
+              <ShieldCheck size={13} />
+              Data safety
+            </span>
+            <span className="text-sm font-medium text-foreground">{formatBackupDate(lastBackup?.at)}</span>
+            {lastBackup ? (
+              <span className="text-xs text-muted-foreground">
+                {lastBackup.bookmarkCount} bookmarks, {lastBackup.savedViewCount} views
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            Chrome removes extension data on uninstall. Keep a full backup file before reinstalling, switching browsers, or clearing local data.
+            Current library: {bookmarkCount} bookmarks and {savedViewCount} saved views.
+          </p>
+          {backupStatus ? (
+            <p className={cn('mt-1 text-xs', backupStatus.type === 'error' ? 'text-danger' : 'text-primary')}>{backupStatus.message}</p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <Button size="sm" variant="primary" onClick={onBackup} disabled={backupBusy || bookmarkCount === 0}>
+            {backupBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
+            {backupBusy ? 'Backing up...' : 'Backup now'}
+          </Button>
+          <Button size="sm" variant="secondary" onClick={onRestore}>
+            <Upload size={14} />
+            Restore
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExportMenu({
+  disabled,
+  onExport
+}: {
+  disabled: boolean;
+  onExport: (format: AppExportFormat) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  const updatePosition = () => {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = 210;
+    const viewportPadding = 12;
+    setPosition({
+      top: rect.bottom + 6,
+      left: Math.min(Math.max(viewportPadding, rect.right - menuWidth), window.innerWidth - menuWidth - viewportPadding)
+    });
+  };
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+
+    updatePosition();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      const target = event.target as Node;
+      if (!triggerRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    }
+
+    function handleLayoutChange() {
+      updatePosition();
+    }
+
+    window.addEventListener('mousedown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleLayoutChange);
+    window.addEventListener('scroll', handleLayoutChange, true);
+    return () => {
+      window.removeEventListener('mousedown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleLayoutChange);
+      window.removeEventListener('scroll', handleLayoutChange, true);
+    };
+  }, [open]);
+
+  const exportItems: Array<{ format: AppExportFormat; label: string; description: string; icon: typeof FileJson }> = [
+    { format: 'json', label: 'JSON backup', description: 'Current view data', icon: FileJson },
+    { format: 'markdown', label: 'Markdown', description: 'Readable notes and posts', icon: FileText },
+    { format: 'csv', label: 'CSV', description: 'Spreadsheet-friendly rows', icon: FileSpreadsheet },
+    { format: 'research-pack', label: 'Research pack', description: 'Markdown bundle for a lane', icon: PackageOpen }
+  ];
+
+  const menu = open && position
+    ? createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[2147483647] w-[210px] border border-border bg-surface p-1.5 shadow-xl"
+          style={{ top: position.top, left: position.left }}
+        >
+          {exportItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.format}
+                type="button"
+                className="flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-muted"
+                onClick={() => {
+                  setOpen(false);
+                  onExport(item.format);
+                }}
+              >
+                <Icon size={14} className="mt-0.5 text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-foreground">{item.label}</span>
+                  <span className="block text-xs text-muted-foreground">{item.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div ref={triggerRef} className="relative w-full sm:w-auto">
+      <button
+        type="button"
+        className="inline-flex h-10 w-full items-center justify-center gap-2 border border-border bg-background px-4 text-xs font-medium text-foreground shadow-sm transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Download size={15} />
+        Export
+        <ChevronsUpDown size={14} className="text-muted-foreground" />
+      </button>
+      {menu}
+    </div>
   );
 }
 
@@ -618,6 +1308,8 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('source');
+  const [focusFilter, setFocusFilter] = useState<BookmarkFocusFilter>('all');
+  const [authorQuery, setAuthorQuery] = useState('');
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
@@ -630,18 +1322,34 @@ function App() {
   const [actionToast, setActionToast] = useState<ActionToast>(null);
   const [activeBookmarkId, setActiveBookmarkId] = useState<string | null>(null);
   const [activeViewId, setActiveViewId] = useState<string | null>(null);
-  const [noteDraft, setNoteDraft] = useState('');
   const [noteBusy, setNoteBusy] = useState(false);
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
-  const debouncedSearchQuery = useDebouncedValue(searchQuery, 200);
+  const [lastBackup, setLastBackup] = useState<LastBackupStatus | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupStatus, setBackupStatus] = useState<ActionToast>(null);
+  const debouncedSearchQuery = searchQuery;
+  const debouncedAuthorQuery = authorQuery;
   const workspaceTopRef = useRef<HTMLElement>(null);
+  const pendingScrollRestoreRef = useRef<number | null>(null);
   const { isPro, license } = useLicenseState();
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived }), [folderId, tagId, includeArchived]);
   const library = useLibraryData(filters);
+  const currentViewState = useMemo<ResearchViewState>(
+    () => ({
+      query: debouncedSearchQuery,
+      sortKey,
+      folderId,
+      tagId,
+      includeArchived,
+      focus: focusFilter,
+      authorQuery: debouncedAuthorQuery
+    }),
+    [debouncedSearchQuery, sortKey, folderId, tagId, includeArchived, focusFilter, debouncedAuthorQuery]
+  );
   const searchMatches = useMemo(
-    () => searchBookmarks(library.bookmarks, debouncedSearchQuery, sortKey),
-    [library.bookmarks, debouncedSearchQuery, sortKey]
+    () => searchBookmarks(library.allBookmarks.filter((bookmark) => bookmarkMatchesResearchView(bookmark, currentViewState)), currentViewState.query, currentViewState.sortKey),
+    [library.allBookmarks, currentViewState]
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const canManageSavedViews = canUseCapability(license, 'saved-views');
@@ -651,7 +1359,33 @@ function App() {
   const canExportCsv = canUseCapability(license, 'csv-export');
   const activeBookmark = searchMatches.find((match) => match.bookmark.id === activeBookmarkId)?.bookmark ?? searchMatches[0]?.bookmark;
   const activeSavedView = library.savedViews.find((savedView) => savedView.id === activeViewId);
-  const noteDirty = (activeBookmark?.note ?? '') !== noteDraft;
+  const activeViewDirty = Boolean(activeSavedView && !matchesSavedView(activeSavedView, currentViewState));
+  const viewSummary = useMemo(() => {
+    let withNotes = 0;
+    let queued = 0;
+
+    for (const match of searchMatches) {
+      if (match.bookmark.note?.trim()) {
+        withNotes += 1;
+      }
+      if (match.bookmark.markedForExport) {
+        queued += 1;
+      }
+    }
+
+    return { withNotes, queued };
+  }, [searchMatches]);
+  const savedViewCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        library.savedViews.map((savedView) => {
+          const state = savedViewState(savedView);
+          const matches = searchBookmarks(library.allBookmarks.filter((bookmark) => bookmarkMatchesResearchView(bookmark, state)), state.query, state.sortKey);
+          return [savedView.id, matches.length];
+        })
+      ),
+    [library.allBookmarks, library.savedViews]
+  );
   const { focusedIndex } = useKeyboardNavigation({
     itemCount: searchMatches.length,
     searchInputRef,
@@ -668,6 +1402,16 @@ function App() {
       }
     },
     onToggleHelp: () => setShowShortcuts((prev) => !prev)
+  });
+
+  useLayoutEffect(() => {
+    if (pendingScrollRestoreRef.current == null) {
+      return;
+    }
+
+    const top = pendingScrollRestoreRef.current;
+    pendingScrollRestoreRef.current = null;
+    window.scrollTo({ top, left: window.scrollX, behavior: 'auto' });
   });
 
   function openUpgrade() {
@@ -707,15 +1451,8 @@ function App() {
   }, [activeBookmarkId, searchMatches]);
 
   useEffect(() => {
-    setNoteDraft(activeBookmark?.note ?? '');
     setNoteStatus(null);
   }, [activeBookmark?.id, activeBookmark?.note]);
-
-  useEffect(() => {
-    if (!matchesSavedView(activeSavedView, { query: debouncedSearchQuery, sortKey, folderId, tagId, includeArchived })) {
-      setActiveViewId(null);
-    }
-  }, [activeSavedView, debouncedSearchQuery, sortKey, folderId, tagId, includeArchived]);
 
   useEffect(() => {
     if (!importStatus || importStatus.type !== 'success') {
@@ -740,6 +1477,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    void getLastBackupStatus().then(setLastBackup);
+  }, []);
+
+  useEffect(() => {
     function handleScroll() {
       setShowBackToTop(window.scrollY > 600);
     }
@@ -750,8 +1491,17 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!backupStatus) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setBackupStatus(null), 5000);
+    return () => window.clearTimeout(timeoutId);
+  }, [backupStatus]);
+
+  useEffect(() => {
     setSelectedIds(new Set());
-  }, [folderId, tagId, includeArchived, debouncedSearchQuery]);
+  }, [folderId, tagId, includeArchived, debouncedSearchQuery, focusFilter, debouncedAuthorQuery]);
 
   function handleCreateFolder() {
     setDialogError(null);
@@ -803,6 +1553,46 @@ function App() {
     setNameDialog({ kind: 'create-view', title: 'Save current view', label: 'View name', initialValue: searchQuery.trim() || undefined });
   }
 
+  async function handleUpdateActiveView() {
+    if (!activeSavedView) {
+      return;
+    }
+    if (!canManageSavedViews) {
+      openUpgrade();
+      return;
+    }
+
+    await updateSavedView(activeSavedView.id, {
+      query: debouncedSearchQuery,
+      sortKey,
+      focus: focusFilter,
+      authorQuery: debouncedAuthorQuery.trim(),
+      folderId: folderId ?? null,
+      tagId: tagId ?? null,
+      includeArchived
+    });
+    await library.refresh();
+    setActionToast({ type: 'success', message: 'Saved view updated.' });
+  }
+
+  async function handleCreateViewTemplates() {
+    if (!canManageSavedViews) {
+      openUpgrade();
+      return;
+    }
+
+    const existingNames = new Set(library.savedViews.map((view) => view.name.toLowerCase()));
+    const templatesToCreate = savedViewTemplates.filter((view) => !existingNames.has(view.name.toLowerCase()));
+    if (!templatesToCreate.length) {
+      setActionToast({ type: 'success', message: 'Saved view templates are already available.' });
+      return;
+    }
+
+    await Promise.all(templatesToCreate.map((view) => createSavedView(view)));
+    await library.refresh();
+    setActionToast({ type: 'success', message: `${templatesToCreate.length} saved view templates added.` });
+  }
+
   function handleRenameView(savedView: SavedView) {
     if (!canManageSavedViews) {
       openUpgrade();
@@ -837,6 +1627,8 @@ function App() {
 
     setSearchQuery(savedView.query);
     setSortKey(savedView.sortKey);
+    setFocusFilter(savedView.focus ?? 'all');
+    setAuthorQuery(savedView.authorQuery ?? '');
     setFolderId(savedView.folderId ?? undefined);
     setTagId(savedView.tagId ?? undefined);
     setIncludeArchived(savedView.includeArchived);
@@ -863,6 +1655,8 @@ function App() {
           name: value,
           query: debouncedSearchQuery,
           sortKey,
+          focus: focusFilter,
+          authorQuery: debouncedAuthorQuery.trim(),
           folderId: folderId ?? null,
           tagId: tagId ?? null,
           includeArchived
@@ -1102,6 +1896,16 @@ function App() {
     await refreshAfter(setBookmarkArchived(bookmarkId, archived));
   }
 
+  async function handleToggleExportQueue(bookmarkId: string, markedForExport: boolean) {
+    await refreshAfter(setBookmarkMarkedForExport(bookmarkId, markedForExport));
+    setActionToast({ type: 'success', message: markedForExport ? 'Marked for export.' : 'Removed from export list.' });
+  }
+
+  function handleAuthorView(authorHandle: string) {
+    setAuthorQuery(authorHandle);
+    setFocusFilter('all');
+  }
+
   function handleDelete(bookmarkId: string) {
     setDialogError(null);
     setConfirmDialog({
@@ -1131,13 +1935,13 @@ function App() {
     });
   }
 
-  async function handleExport(format: 'json' | 'markdown' | 'csv') {
+  async function handleExport(format: AppExportFormat) {
     const bookmarks = searchMatches.map((match) => match.bookmark);
     if (bookmarks.length === 0) {
       return;
     }
 
-    if (format === 'markdown' && !canExportMarkdown) {
+    if ((format === 'markdown' || format === 'research-pack') && !canExportMarkdown) {
       openUpgrade();
       return;
     }
@@ -1151,6 +1955,34 @@ function App() {
       await downloadBookmarks(format, bookmarks, { includeNotes: isPro });
     } catch (error) {
       setImportStatus({ type: 'error', message: error instanceof Error ? error.message : 'Export failed. Please try again.' });
+    }
+  }
+
+  async function handleFullBackup() {
+    if (backupBusy) {
+      return;
+    }
+
+    setBackupBusy(true);
+    setBackupStatus(null);
+    try {
+      const backup = await exportLocalBackup();
+      const filename = backupFilename(backup.exportedAt);
+      await downloadText(filename, JSON.stringify(backup, null, 2), 'application/json;charset=utf-8');
+
+      const status: LastBackupStatus = {
+        at: backup.exportedAt,
+        bookmarkCount: backup.bookmarks.length,
+        savedViewCount: backup.savedViews.length,
+        filename
+      };
+      await setLastBackupStatus(status);
+      setLastBackup(status);
+      setBackupStatus({ type: 'success', message: `Full backup generated: ${filename}` });
+    } catch (error) {
+      setBackupStatus({ type: 'error', message: error instanceof Error ? error.message : 'Backup failed. Please try again.' });
+    } finally {
+      setBackupBusy(false);
     }
   }
 
@@ -1233,7 +2065,7 @@ function App() {
     }
   }
 
-  async function handleSaveNote() {
+  async function handleSaveNote(nextNote: string) {
     if (!activeBookmark) {
       return;
     }
@@ -1245,7 +2077,7 @@ function App() {
     setNoteBusy(true);
     setNoteStatus(null);
     try {
-      await updateBookmarkNote(activeBookmark.id, noteDraft);
+      await updateBookmarkNote(activeBookmark.id, nextNote);
       await library.refresh();
       setNoteStatus('Saved.');
     } catch (error) {
@@ -1305,6 +2137,14 @@ function App() {
     setIncludeArchived(false);
   }
 
+  function handleFocusLaneChange(nextFocus: BookmarkFocusFilter) {
+    pendingScrollRestoreRef.current = window.scrollY;
+    setFocusFilter(nextFocus);
+    setFolderId(undefined);
+    setTagId(undefined);
+    setIncludeArchived(false);
+  }
+
   const visibleTagOptions = tagDialog?.kind === 'remove'
     ? (library.bookmarks.find((item) => item.id === tagDialog.bookmarkId)?.tags ?? [])
     : library.tags;
@@ -1336,14 +2176,16 @@ function App() {
         </div>
       }
     >
-      <section ref={workspaceTopRef} className="grid min-h-[calc(100vh-140px)] grid-cols-1 border border-border bg-surface shadow-[0_24px_80px_rgba(19,42,39,0.08)] lg:grid-cols-[280px_minmax(0,1fr)_340px]">
+      <section ref={workspaceTopRef} className="grid min-h-[calc(100vh-140px)] grid-cols-1 border border-border bg-surface shadow-[0_24px_80px_rgba(19,42,39,0.08)] lg:grid-cols-[260px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)_340px]">
         <AppSidebar
           folders={library.folders}
           tags={library.tags}
           counts={library.counts}
+          focusFilter={focusFilter}
           activeFolderId={folderId}
           activeTagId={tagId}
           includeArchived={includeArchived}
+          onFocusChange={handleFocusLaneChange}
           onFolderChange={handleFolderChange}
           onTagChange={handleTagChange}
           onArchivedChange={handleArchivedChange}
@@ -1358,34 +2200,44 @@ function App() {
           <SavedViewRail
             views={library.savedViews}
             activeViewId={activeViewId}
+            viewCounts={savedViewCounts}
+            activeViewDirty={activeViewDirty}
             canManage={canManageSavedViews}
             onCreate={handleCreateView}
+            onCreateTemplates={() => void handleCreateViewTemplates()}
+            onUpdate={() => void handleUpdateActiveView()}
             onApply={handleApplySavedView}
             onRename={handleRenameView}
             onDelete={handleDeleteView}
           />
 
+          <DataSafetyBar
+            bookmarkCount={library.counts.total}
+            savedViewCount={library.savedViews.length}
+            lastBackup={lastBackup}
+            backupBusy={backupBusy}
+            backupStatus={backupStatus}
+            onBackup={() => void handleFullBackup()}
+            onRestore={() => void chrome.runtime?.openOptionsPage?.()}
+          />
+
           <div className="border-b border-border bg-surface px-4 py-4">
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_160px_auto] xl:items-center">
-              <label className="flex h-11 min-w-0 items-center gap-2 border border-border bg-background px-3 text-sm shadow-inner">
-                <Search size={17} className="text-muted-foreground" />
-                <input
-                  ref={searchInputRef}
-                  className="w-full bg-transparent outline-none placeholder:text-muted-foreground"
-                  placeholder="Search text, authors, tags, notes"
-                  aria-label="Search bookmarks"
-                  value={searchQuery}
-                  onChange={(event) => setSearchQuery(event.target.value)}
-                />
-                {searchQuery ? (
-                  <button className="grid h-7 w-7 place-items-center text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Clear search" onClick={() => setSearchQuery('')}>
-                    <X size={15} />
-                  </button>
-                ) : null}
-              </label>
-              <div className="relative">
+            <DebouncedFilterInput
+              ref={searchInputRef}
+              value={searchQuery}
+              onCommit={setSearchQuery}
+              containerClassName="flex h-11 min-w-0 items-center gap-2 border border-border bg-background px-3 text-sm shadow-inner"
+              inputClassName="w-full bg-transparent outline-none placeholder:text-muted-foreground"
+              icon={<Search size={17} className="text-muted-foreground" />}
+              placeholder="Search text, authors, tags, notes"
+              ariaLabel="Search bookmarks"
+            />
+
+            <div className="mt-3 grid gap-2 md:grid-cols-[minmax(150px,0.75fr)_minmax(190px,1fr)] xl:grid-cols-[minmax(170px,0.8fr)_minmax(220px,1fr)_minmax(0,1.35fr)]">
+              <label className="relative flex h-10 min-w-0 items-center gap-2 border border-border bg-[#f6fbfa] px-3 text-sm shadow-inner dark:bg-[#111816]">
+                <span className="shrink-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Sort</span>
                 <select
-                  className="h-11 w-full appearance-none border border-border bg-background pl-3 pr-9 text-sm text-foreground shadow-inner outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+                  className="min-w-0 flex-1 appearance-none bg-transparent pr-6 text-sm text-foreground outline-none"
                   value={sortKey}
                   onChange={(event) => setSortKey(event.target.value as SortKey)}
                   aria-label="Sort bookmarks"
@@ -1395,71 +2247,129 @@ function App() {
                   <option value="date-imported">Date imported</option>
                   <option value="author">Author</option>
                 </select>
-                <ChevronsUpDown size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <ChevronsUpDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              </label>
+
+              <label className="relative flex h-10 min-w-0 items-center gap-2 border border-border bg-[#f6fbfa] px-3 text-sm shadow-inner dark:bg-[#111816]">
+                <Filter size={15} className="text-muted-foreground" />
+                <span className="shrink-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground">Focus</span>
+                <select
+                  className="min-w-0 flex-1 appearance-none bg-transparent pr-6 text-sm text-foreground outline-none"
+                  value={focusFilter}
+                  onChange={(event) => setFocusFilter(event.target.value as BookmarkFocusFilter)}
+                  aria-label="Focus filter"
+                >
+                  {focusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronsUpDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              </label>
+
+              <DebouncedFilterInput
+                value={authorQuery}
+                onCommit={setAuthorQuery}
+                containerClassName="flex h-10 min-w-0 items-center gap-2 border border-border bg-[#f6fbfa] px-3 text-sm shadow-inner dark:bg-[#111816] md:col-span-2 xl:col-span-1"
+                label="Author"
+                placeholder="@handle or name"
+                ariaLabel="Filter by author"
+              />
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-start justify-between gap-3 text-sm">
+              <div className="min-w-0 flex-1 border border-border bg-[#f6fbfa] px-3 py-2.5 shadow-inner dark:bg-[#111816]">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <span className="inline-flex items-center gap-2 text-foreground">
+                    <BookMarked size={14} className="text-primary" />
+                    <span className="text-base font-semibold tabular-nums">{searchMatches.length}</span>
+                    <span className="text-sm text-muted-foreground">in view</span>
+                  </span>
+                  <span className="inline-flex items-center gap-2 text-muted-foreground">
+                    <Sparkles size={13} />
+                    <span className="text-xs uppercase tracking-[0.14em]">Notes {viewSummary.withNotes}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-2 text-muted-foreground">
+                    <PackageOpen size={13} />
+                    <span className="text-xs uppercase tracking-[0.14em]">Export {viewSummary.queued}</span>
+                  </span>
+                </div>
+                {(activeSavedView || focusFilter !== 'all' || debouncedAuthorQuery || importStatus) ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {activeSavedView ? (
+                      <span className="inline-flex h-7 items-center gap-1.5 bg-accent/10 px-2.5 text-xs text-foreground">
+                        <Waypoints size={12} />
+                        <span className="max-w-[180px] truncate">{activeSavedView.name}</span>
+                        {activeViewDirty ? <span className="text-accent">Edited</span> : null}
+                      </span>
+                    ) : null}
+                    {focusFilter !== 'all' ? (
+                      <span className="inline-flex h-7 items-center bg-background px-2.5 text-xs text-muted-foreground">
+                        Focus: {focusOptions.find((option) => option.value === focusFilter)?.label}
+                      </span>
+                    ) : null}
+                    {debouncedAuthorQuery ? (
+                      <span className="inline-flex h-7 max-w-full items-center bg-background px-2.5 text-xs text-muted-foreground">
+                        <span className="truncate">Author: {debouncedAuthorQuery}</span>
+                      </span>
+                    ) : null}
+                    {importStatus ? (
+                      <span className={cn('text-xs', importStatus.type === 'error' ? 'text-danger' : 'text-muted-foreground')}>
+                        {importStatus.message}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button variant="primary" className="h-11 px-4" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
+
+              <div className="flex w-full flex-wrap items-center gap-2 2xl:w-auto">
+                <Button variant="primary" className="h-10 w-full px-4 sm:w-auto" onClick={() => void handleImport('auto-scroll')} disabled={Boolean(importMode)}>
                   {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                   {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => void handleExport('json')} disabled={searchMatches.length === 0}>
-                  <FileJson size={14} />
-                  JSON
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => void handleExport('markdown')} disabled={searchMatches.length === 0}>
-                  <FileText size={14} />
-                  Markdown
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => void handleExport('csv')} disabled={searchMatches.length === 0}>
-                  <FileSpreadsheet size={14} />
-                  CSV
-                </Button>
+                <ExportMenu disabled={searchMatches.length === 0} onExport={(format) => void handleExport(format)} />
               </div>
-            </div>
-
-            <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
-              <div className="inline-flex items-center gap-2 border border-border bg-background px-3 py-2 text-muted-foreground">
-                <BookMarked size={14} />
-                <span>{searchMatches.length} in view</span>
-              </div>
-              <div className="inline-flex items-center gap-2 border border-border bg-background px-3 py-2 text-muted-foreground">
-                <Sparkles size={14} />
-                <span>{library.counts.withNotes} with notes</span>
-              </div>
-              {importStatus ? (
-                <div className={cn('text-sm', importStatus.type === 'error' ? 'text-danger' : 'text-muted-foreground')}>
-                  {importStatus.message}
-                </div>
-              ) : null}
             </div>
           </div>
 
           {selectedCount > 0 ? (
-            <div className="flex flex-wrap items-center gap-2 border-b border-border bg-[#f2f7f5] px-4 py-3 text-sm dark:bg-[#101816]">
-              <span className="font-medium text-foreground">{selectedCount} selected</span>
-              <Button size="sm" variant="ghost" onClick={handleSelectAllVisible}>
-                All in view
-              </Button>
-              <Button size="sm" variant="ghost" onClick={handleInvertVisibleSelection}>
-                Invert
-              </Button>
-              <Button size="sm" variant="ghost" onClick={handleClearSelection}>
-                Clear
-              </Button>
-              <div className="ml-auto flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => void handleBulkTag()}>
-                  <Tags size={14} />
-                  Tag
-                </Button>
-                <Button size="sm" onClick={() => void handleBulkMove()}>
-                  <Folder size={14} />
-                  Move
-                </Button>
-                <Button size="sm" variant="danger" onClick={() => void handleBulkDelete()}>
-                  <Trash2 size={14} />
-                  Delete
-                </Button>
-                {!canUseBulkActions ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Lock size={12} />Pro</span> : null}
+            <div className="border-b border-border bg-[#eef6f3] px-4 py-3 text-sm dark:bg-[#101816]">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-foreground">{selectedCount} selected</span>
+                    {!canUseBulkActions ? <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><Lock size={12} />Pro bulk tools</span> : null}
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Apply tags, move folders, or remove selected bookmarks from the current view.
+                  </div>
+                </div>
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+                  <Button size="sm" variant="ghost" onClick={handleSelectAllVisible}>
+                    All in view
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleInvertVisibleSelection}>
+                    Invert
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleClearSelection}>
+                    Clear
+                  </Button>
+                </div>
+                <div className="flex w-full flex-wrap items-center gap-2 lg:w-auto">
+                  <Button size="sm" className="flex-1 sm:flex-none" onClick={() => void handleBulkTag()}>
+                    <Tags size={14} />
+                    Tag
+                  </Button>
+                  <Button size="sm" className="flex-1 sm:flex-none" onClick={() => void handleBulkMove()}>
+                    <Folder size={14} />
+                    Move
+                  </Button>
+                  <Button size="sm" className="flex-1 sm:flex-none" variant="danger" onClick={() => void handleBulkDelete()}>
+                    <Trash2 size={14} />
+                    Delete
+                  </Button>
+                </div>
               </div>
             </div>
           ) : null}
@@ -1478,6 +2388,8 @@ function App() {
             onMove={handleMove}
             onTag={handleTag}
             onRemoveTag={handleRemoveTag}
+            onAuthor={handleAuthorView}
+            onToggleExportQueue={(bookmarkId, markedForExport) => void handleToggleExportQueue(bookmarkId, markedForExport)}
             selectedIds={selectedIds}
             onSelectedChange={handleSelectedChange}
           />
@@ -1485,13 +2397,12 @@ function App() {
 
         <BookmarkInspector
           bookmark={activeBookmark}
-          noteDraft={noteDraft}
-          noteDirty={noteDirty}
           noteBusy={noteBusy}
           noteStatus={noteStatus}
           canEditNotes={canEditNotes}
-          onNoteChange={setNoteDraft}
-          onSaveNote={() => void handleSaveNote()}
+          onSaveNote={(nextNote) => void handleSaveNote(nextNote)}
+          onAuthorView={handleAuthorView}
+          onToggleExportQueue={(bookmarkId, markedForExport) => void handleToggleExportQueue(bookmarkId, markedForExport)}
           onUpgrade={openUpgrade}
         />
       </section>

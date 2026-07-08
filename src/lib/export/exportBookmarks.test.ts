@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BookmarkListItem } from '../db/bookmarkRepository';
-import { createCsvExport, createExportFilename, createJsonBackup, createMarkdownExport } from './exportBookmarks';
+import { createCsvExport, createExportFilename, createJsonBackup, createMarkdownExport, createResearchPackExport } from './exportBookmarks';
 
 function item(overrides: Partial<BookmarkListItem>): BookmarkListItem {
   return {
@@ -38,8 +38,11 @@ describe('exportBookmarks', () => {
     const markdown = createMarkdownExport([item({ folder: undefined, tags: [], note: 'Quote this.' })], { includeNotes: true });
 
     expect(markdown).toContain('## Uncategorized');
+    expect(markdown).toContain('> Hello, "CSV"');
+    expect(markdown).toContain('- Folder: Uncategorized');
     expect(markdown).toContain('- Tags: None');
-    expect(markdown).toContain('- Note: Quote this.');
+    expect(markdown).toContain('#### Note');
+    expect(markdown).toContain('Quote this.');
   });
 
   it('escapes CSV commas, quotes, and newlines', () => {
@@ -52,5 +55,26 @@ describe('exportBookmarks', () => {
   it('creates dated filenames', () => {
     expect(createExportFilename('csv', new Date('2026-06-22T00:00:00.000Z'))).toBe('bookmarknest-export-2026-06-22.csv');
     expect(createExportFilename('markdown', new Date('2026-06-22T00:00:00.000Z'))).toBe('bookmarknest-export-2026-06-22.md');
+  });
+
+  it('creates a research pack with metadata and notes', () => {
+    const pack = createResearchPackExport(
+      [
+        item({
+          note: 'Use this in the synthesis section.',
+          mediaUrls: ['https://pbs.twimg.com/media/1.jpg'],
+          tags: [{ id: 'tag_1', name: 'Research', color: '#111', createdAt: 1, updatedAt: 1, usageCount: 1 }],
+          folder: { id: 'folder_1', name: 'Signals', createdAt: 1, updatedAt: 1, sortOrder: 0 },
+          markedForExport: true
+        })
+      ],
+      { includeNotes: true }
+    );
+
+    expect(pack).toContain('# BookmarkNest Research Pack');
+    expect(pack).toContain('signals:');
+    expect(pack).toContain('### Research note');
+    expect(pack).toContain('Use this in the synthesis section.');
+    expect(pack).toContain('folder: "Signals"');
   });
 });

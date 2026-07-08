@@ -19,6 +19,7 @@ import {
   resetDomainData,
   restoreFolder,
   restoreTag,
+  setBookmarkMarkedForExport,
   softDeleteBookmark,
   softDeleteMissingXBookmarks,
   setBookmarkArchived,
@@ -100,11 +101,23 @@ describe('bookmarkRepository', () => {
     expect(stored?.noteUpdatedAt).toEqual(expect.any(Number));
   });
 
+  it('marks bookmarks for the export queue', async () => {
+    const inserted = await upsertBookmark(bookmarkInput(1));
+
+    await setBookmarkMarkedForExport(inserted.bookmark.id, true);
+
+    const stored = await db.bookmarks.get(inserted.bookmark.id);
+    expect(stored?.markedForExport).toBe(true);
+    expect(stored?.exportMarkedAt).toEqual(expect.any(Number));
+  });
+
   it('creates, updates, lists, and deletes saved views', async () => {
     const savedView = await createSavedView({
       name: 'AI research',
       query: 'ai',
       sortKey: 'source',
+      focus: 'with-notes',
+      authorQuery: 'ada',
       folderId: null,
       tagId: null,
       includeArchived: false
@@ -116,6 +129,8 @@ describe('bookmarkRepository', () => {
 
     const [updated] = await listSavedViews();
     expect(updated.name).toBe('Deep research');
+    expect(updated.focus).toBe('with-notes');
+    expect(updated.authorQuery).toBe('ada');
     expect(updated.includeArchived).toBe(true);
 
     await deleteSavedView(savedView.id);
@@ -287,6 +302,8 @@ describe('bookmarkRepository', () => {
       name: 'Restored lane',
       query: 'restore',
       sortKey: 'author',
+      focus: 'with-notes',
+      authorQuery: 'author',
       folderId: folder.id,
       tagId: tag.id,
       includeArchived: false
@@ -313,7 +330,7 @@ describe('bookmarkRepository', () => {
     expect(item.tags.map((itemTag) => itemTag.name)).toEqual(['restore']);
     expect(item.note).toBe('Preserve this angle');
     expect(await listImportSessions()).toHaveLength(1);
-    expect((await listSavedViews())[0]?.name).toBe('Restored lane');
+    expect((await listSavedViews())[0]).toMatchObject({ name: 'Restored lane', focus: 'with-notes', authorQuery: 'author' });
   });
 
   it('imports legacy backups without saved views', async () => {

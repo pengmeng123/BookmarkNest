@@ -1,5 +1,6 @@
 export type BookmarkSource = 'x-bookmarks-page' | 'manual-import';
 export type BookmarkSortKey = 'source' | 'date-posted' | 'date-imported' | 'author';
+export type BookmarkFocusFilter = 'all' | 'with-notes' | 'without-notes' | 'with-media' | 'unfiled' | 'export-queue';
 
 export interface Bookmark {
   id: string;
@@ -18,6 +19,8 @@ export interface Bookmark {
   updatedAt: number;
   note?: string;
   noteUpdatedAt?: number;
+  markedForExport?: boolean;
+  exportMarkedAt?: number;
   folderId?: string;
   tagIds: string[];
   archived: boolean;
@@ -49,6 +52,8 @@ export interface SavedView {
   name: string;
   query: string;
   sortKey: BookmarkSortKey;
+  focus?: BookmarkFocusFilter;
+  authorQuery?: string;
   folderId?: string | null;
   tagId?: string | null;
   includeArchived: boolean;
@@ -108,6 +113,13 @@ export interface LastSyncStatus {
   removed?: number;
   found?: number;
   error?: string;
+}
+
+export interface LastBackupStatus {
+  at: number;
+  bookmarkCount: number;
+  savedViewCount: number;
+  filename: string;
 }
 
 export interface LicenseData {

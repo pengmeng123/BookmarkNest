@@ -1,6 +1,7 @@
 import type { BookmarkListItem } from '../db/bookmarkRepository';
+import { getBookmarkSignals } from '../bookmarks/metadata';
 
-export type ExportFormat = 'json' | 'markdown' | 'csv';
+export type ExportFormat = 'json' | 'markdown' | 'csv' | 'research-pack';
 export interface ExportOptions {
   includeNotes?: boolean;
 }
@@ -49,6 +50,17 @@ function formatDate(timestamp: number) {
   return new Date(timestamp).toISOString().slice(0, 10);
 }
 
+function yamlString(value: string | undefined | null) {
+  return JSON.stringify(value ?? '');
+}
+
+function yamlList(values: string[]) {
+  if (!values.length) {
+    return '[]';
+  }
+  return `[${values.map(yamlString).join(', ')}]`;
+}
+
 export function createMarkdownExport(bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
   const groups = new Map<string, BookmarkListItem[]>();
 
@@ -62,17 +74,18 @@ export function createMarkdownExport(bookmarks: BookmarkListItem[], options: Exp
       const body = items
         .map((bookmark) => {
           const tags = bookmark.tags.map((tag) => tag.name).join(', ') || 'None';
-          const note = options.includeNotes && bookmark.note?.trim() ? ['', `- Note: ${bookmark.note.trim()}`] : [];
+          const note = options.includeNotes && bookmark.note?.trim() ? ['', '#### Note', '', bookmark.note.trim()] : [];
           return [
             `### @${bookmark.authorHandle} - ${bookmark.authorName}`,
             '',
-            bookmark.contentText,
+            `> ${bookmark.contentText.replace(/\n/g, '\n> ')}`,
             '',
             ...(bookmark.mediaUrls?.length ? [`- Media: ${bookmark.mediaUrls.join(' , ')}`] : []),
             `- URL: ${bookmark.tweetUrl ?? ''}`,
+            `- Folder: ${folderName}`,
             `- Tags: ${tags}`,
-            ...note,
-            `- Imported: ${formatDate(bookmark.importedAt)}`
+            `- Imported: ${formatDate(bookmark.importedAt)}`,
+            ...note
           ].join('\n');
         })
         .join('\n\n');
@@ -111,8 +124,60 @@ export function createCsvExport(bookmarks: BookmarkListItem[], options: ExportOp
   return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
 }
 
+export function createResearchPackExport(bookmarks: BookmarkListItem[], options: ExportOptions = {}) {
+  const items = bookmarks.filter(eligible);
+  const lines = [
+    '---',
+    'source: BookmarkNest',
+    `exported_at: ${yamlString(new Date().toISOString())}`,
+    `bookmark_count: ${items.length}`,
+    '---',
+    '',
+    '# BookmarkNest Research Pack',
+    '',
+    'This pack was generated locally from the current BookmarkNest view.',
+    ''
+  ];
+
+  for (const bookmark of items) {
+    const folderName = bookmark.folder?.name ?? 'Uncategorized';
+    const tags = bookmark.tags.map((tag) => tag.name);
+    const signals = getBookmarkSignals(bookmark).map((signal) => signal.label);
+    lines.push(
+      '---',
+      `tweet_id: ${yamlString(bookmark.tweetId)}`,
+      `url: ${yamlString(bookmark.tweetUrl)}`,
+      `author: ${yamlString(bookmark.authorName)}`,
+      `handle: ${yamlString(bookmark.authorHandle)}`,
+      `folder: ${yamlString(folderName)}`,
+      `tags: ${yamlList(tags)}`,
+      `signals: ${yamlList(signals)}`,
+      `created_at: ${bookmark.createdAt ? yamlString(new Date(bookmark.createdAt).toISOString()) : 'null'}`,
+      `imported_at: ${yamlString(new Date(bookmark.importedAt).toISOString())}`,
+      '---',
+      '',
+      `## @${bookmark.authorHandle} - ${bookmark.authorName}`,
+      '',
+      bookmark.contentText,
+      '',
+      `Source: ${bookmark.tweetUrl ?? ''}`,
+      ''
+    );
+
+    if (bookmark.mediaUrls.length) {
+      lines.push('Media:', ...bookmark.mediaUrls.map((url) => `- ${url}`), '');
+    }
+
+    if (options.includeNotes && bookmark.note?.trim()) {
+      lines.push('### Research note', '', bookmark.note.trim(), '');
+    }
+  }
+
+  return lines.join('\n');
+}
+
 export function createExportFilename(format: ExportFormat, now = new Date()) {
-  const extension = format === 'markdown' ? 'md' : format;
+  const extension = format === 'markdown' || format === 'research-pack' ? 'md' : format;
   return `bookmarknest-export-${formatDate(now.getTime())}.${extension}`;
 }
 
@@ -130,6 +195,14 @@ export function createDownloadPayload(format: ExportFormat, bookmarks: BookmarkL
       filename: createExportFilename(format),
       mimeType: 'text/markdown',
       content: createMarkdownExport(bookmarks, options)
+    };
+  }
+
+  if (format === 'research-pack') {
+    return {
+      filename: createExportFilename(format),
+      mimeType: 'text/markdown',
+      content: createResearchPackExport(bookmarks, options)
     };
   }
 

@@ -16,6 +16,7 @@ import type { SavedView } from '../../shared/types';
 
 export interface LibraryData {
   bookmarks: BookmarkListItem[];
+  allBookmarks: BookmarkListItem[];
   folders: Folder[];
   tags: Tag[];
   savedViews: SavedView[];
@@ -26,10 +27,11 @@ export interface LibraryData {
   refresh: () => Promise<void>;
 }
 
-const emptyCounts: BookmarkCounts = { total: 0, uncategorized: 0, archived: 0, withNotes: 0, byFolder: {} };
+const emptyCounts: BookmarkCounts = { total: 0, uncategorized: 0, archived: 0, withNotes: 0, exportQueue: 0, byFolder: {} };
 
 export function useLibraryData(filters: BookmarkListFilters): LibraryData {
   const [bookmarks, setBookmarks] = useState<BookmarkListItem[]>([]);
+  const [allBookmarks, setAllBookmarks] = useState<BookmarkListItem[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
@@ -50,7 +52,9 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
         listImportSessions(),
         getBookmarkCounts()
       ]);
+      const [activeBookmarks, archivedBookmarks] = await Promise.all([listBookmarkItems(), listBookmarkItems({ includeArchived: true })]);
       setBookmarks(nextBookmarks);
+      setAllBookmarks([...activeBookmarks, ...archivedBookmarks]);
       setFolders(nextFolders);
       setTags(nextTags);
       setSavedViews(nextSavedViews);
@@ -67,5 +71,5 @@ export function useLibraryData(filters: BookmarkListFilters): LibraryData {
     void refresh();
   }, [refresh]);
 
-  return { bookmarks, folders, tags, savedViews, importSessions, counts, loading, error, refresh };
+  return { bookmarks, allBookmarks, folders, tags, savedViews, importSessions, counts, loading, error, refresh };
 }

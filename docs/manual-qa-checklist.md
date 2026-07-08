@@ -38,25 +38,28 @@
 
 ## Search
 
-- Search matches post content, author, handle, tag, and folder.
+- Search matches post content, note text, author, handle, tag, and folder.
 - Search is case-insensitive.
 - Multi-word search uses AND behavior.
 - `@handle` and `handle` both match author handle.
+- Focus filter can show all evidence, bookmarks with notes, bookmarks needing notes, media bookmarks, and unfiled bookmarks.
+- Author filter narrows the list by display name or handle.
 - Clear search resets the visible list.
 
 ## Free and Pro
 
-- Free users can manage only the recent 200 undeleted bookmarks.
-- Older local bookmarks remain stored and become manageable after Pro activation.
-- Markdown, CSV, and bulk actions are gated for Free users.
-- Activated Pro unlocks all local bookmarks and Pro exports.
+- Free users can browse, search, organize, archive/delete, and JSON-export the full local library.
+- Markdown, CSV, notes, saved views, bulk actions, auto-sync, and mirror removals are gated for Free users.
+- Free users attempting note saves or saved-view actions are sent to upgrade.
+- Downgrade keeps local notes and saved views stored, visible, and non-destructive while editing/use is gated.
+- Activated Pro unlocks notes, saved views, bulk actions, Pro exports, auto-sync, and mirror removals.
 - Offline validation keeps active Pro access.
 - Invalid/revoked/device-limit states return to Free without deleting local bookmarks.
 
 ## Export
 
-- Free JSON export includes recent manageable bookmarks and folder/tag relationships.
-- Pro Markdown export handles empty tags and folders.
+- Free JSON export includes bookmarks, notes, and folder/tag relationships for local backup.
+- Pro Markdown export handles empty tags, folders, and note sections.
 - Pro CSV export correctly escapes commas, quotes, and newlines.
 - Empty export scope disables export or shows a clear message.
 - Deleted bookmarks are excluded.
