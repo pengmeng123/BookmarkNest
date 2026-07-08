@@ -71,7 +71,7 @@ import { downloadBookmarks, downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import { searchBookmarks, type SortKey } from '../lib/search/searchBookmarks';
-import { getLastBackupStatus, setLastBackupStatus } from '../lib/storage/localStorage';
+import { getLastBackupStatus, setLastBackupStatus, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
 import { cn } from '../lib/utils/cn';
 import type { BookmarkFocusFilter, ImportSession, LastBackupStatus, SavedView } from '../shared/types';
 import '../styles/globals.css';
@@ -116,14 +116,14 @@ const focusOptions: { value: BookmarkFocusFilter; label: string }[] = [
   { value: 'without-notes', label: 'Needs notes' },
   { value: 'with-media', label: 'Has media' },
   { value: 'unfiled', label: 'Unfiled' },
-  { value: 'export-queue', label: 'Export list' }
+  { value: 'export-queue', label: 'Export picks' }
 ];
 
 const savedViewTemplates: Array<Pick<SavedView, 'name' | 'query' | 'sortKey' | 'focus' | 'authorQuery' | 'folderId' | 'tagId' | 'includeArchived'>> = [
   { name: 'Needs notes', query: '', sortKey: 'source', focus: 'without-notes', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
   { name: 'Media references', query: '', sortKey: 'source', focus: 'with-media', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
   { name: 'Unfiled inbox', query: '', sortKey: 'source', focus: 'unfiled', authorQuery: '', folderId: null, tagId: null, includeArchived: false },
-  { name: 'Export list', query: '', sortKey: 'source', focus: 'export-queue', authorQuery: '', folderId: null, tagId: null, includeArchived: false }
+  { name: 'Export picks', query: '', sortKey: 'source', focus: 'export-queue', authorQuery: '', folderId: null, tagId: null, includeArchived: false }
 ];
 
 function formatImportError(error?: string) {
@@ -396,7 +396,7 @@ function AppSidebar({
             >
               <div className="flex items-center gap-2 text-muted-foreground">
                 <PackageOpen size={14} />
-                <span>Export</span>
+                <span>Picks</span>
               </div>
               <div className="mt-1 text-lg font-semibold text-foreground">{counts.exportQueue}</div>
             </button>
@@ -771,7 +771,7 @@ function BookmarkInspector({
             </div>
             <div className="flex items-center gap-3 border border-border/70 bg-background/55 px-3 py-2.5 text-muted-foreground">
               <PackageOpen size={15} />
-              Export list status
+              Export picks status
             </div>
           </div>
         </div>
@@ -902,7 +902,7 @@ function BookmarkInspector({
           <div className="mt-3">
             <Button variant={bookmark.markedForExport ? 'primary' : 'secondary'} className="justify-start" onClick={() => onToggleExportQueue(bookmark.id, !bookmark.markedForExport)}>
               <PackageOpen size={14} />
-              {bookmark.markedForExport ? 'Remove export mark' : 'Mark for export'}
+              {bookmark.markedForExport ? 'Remove from picks' : 'Pick for export'}
             </Button>
           </div>
         </div>
@@ -1335,6 +1335,7 @@ function App() {
   const { isPro, license } = useLicenseState();
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived }), [folderId, tagId, includeArchived]);
   const library = useLibraryData(filters);
+  const refreshLibrary = library.refresh;
   const currentViewState = useMemo<ResearchViewState>(
     () => ({
       query: debouncedSearchQuery,
@@ -1479,6 +1480,23 @@ function App() {
   useEffect(() => {
     void getLastBackupStatus().then(setLastBackup);
   }, []);
+
+  useEffect(
+    () =>
+      subscribeToLocalStateChanges({
+        onLocalDataChange: (status) => {
+          void refreshLibrary();
+          setSelectedIds(new Set());
+          setActiveBookmarkId(null);
+          setActionToast({
+            type: 'success',
+            message: status.reason === 'local-data-cleared' ? 'Local library cleared.' : 'Local library refreshed.'
+          });
+        },
+        onLastBackupChange: setLastBackup
+      }),
+    [refreshLibrary]
+  );
 
   useEffect(() => {
     function handleScroll() {
@@ -1898,7 +1916,7 @@ function App() {
 
   async function handleToggleExportQueue(bookmarkId: string, markedForExport: boolean) {
     await refreshAfter(setBookmarkMarkedForExport(bookmarkId, markedForExport));
-    setActionToast({ type: 'success', message: markedForExport ? 'Marked for export.' : 'Removed from export list.' });
+    setActionToast({ type: 'success', message: markedForExport ? 'Added to export picks.' : 'Removed from export picks.' });
   }
 
   function handleAuthorView(authorHandle: string) {
@@ -2292,7 +2310,7 @@ function App() {
                   </span>
                   <span className="inline-flex items-center gap-2 text-muted-foreground">
                     <PackageOpen size={13} />
-                    <span className="text-xs uppercase tracking-[0.14em]">Export {viewSummary.queued}</span>
+                    <span className="text-xs uppercase tracking-[0.14em]">Picks {viewSummary.queued}</span>
                   </span>
                 </div>
                 {(activeSavedView || focusFilter !== 'all' || debouncedAuthorQuery || importStatus) ? (

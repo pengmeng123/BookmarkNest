@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 import { cn } from '../lib/utils/cn';
@@ -22,6 +23,7 @@ const focusableSelector = [
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])'
 ].join(',');
+const formControlSelector = 'input:not([disabled]), select:not([disabled]), textarea:not([disabled])';
 
 export function Dialog({ open, title, description, children, footer, onClose, className, closeOnOverlayClick = true }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -33,8 +35,9 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
 
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     window.setTimeout(() => {
-      const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(focusableSelector);
-      firstFocusable?.focus();
+      const firstFormControl = dialogRef.current?.querySelector<HTMLElement>(formControlSelector);
+      const firstFocusable = firstFormControl ?? dialogRef.current?.querySelector<HTMLElement>(focusableSelector);
+      firstFocusable?.focus({ preventScroll: true });
     }, 0);
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -77,9 +80,9 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
     return null;
   }
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/35 px-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/45 px-4"
       onMouseDown={(event) => {
         if (closeOnOverlayClick && event.target === event.currentTarget) {
           onClose();
@@ -94,6 +97,7 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
         tabIndex={-1}
         className={cn(
           'w-full max-w-md overflow-hidden rounded-app border border-border bg-surface shadow-2xl ring-1 ring-black/5',
+          '[contain:layout_paint]',
           className
         )}
       >
@@ -117,6 +121,7 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
         <div className="px-5 py-4">{children}</div>
         {footer ? <div className="flex justify-end gap-2 border-t border-border bg-background/80 px-5 py-4">{footer}</div> : null}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

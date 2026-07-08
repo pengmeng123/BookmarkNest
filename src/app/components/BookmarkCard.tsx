@@ -300,8 +300,8 @@ export const BookmarkCard = memo(function BookmarkCard({
           size="icon"
           variant={bookmark.markedForExport ? 'primary' : 'secondary'}
           onClick={() => onToggleExportQueue(bookmark.id, !bookmark.markedForExport)}
-          title={bookmark.markedForExport ? 'Remove from export list' : 'Mark for export'}
-          aria-label={bookmark.markedForExport ? 'Remove from export list' : 'Mark for export'}
+          title={bookmark.markedForExport ? 'Remove from export picks' : 'Pick for export'}
+          aria-label={bookmark.markedForExport ? 'Remove from export picks' : 'Pick for export'}
         >
           <BookMarked size={14} />
         </Button>

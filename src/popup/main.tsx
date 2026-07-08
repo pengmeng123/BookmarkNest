@@ -8,7 +8,7 @@ import { Button } from '../components/Button';
 import { useTheme } from '../hooks/useTheme';
 import { getBookmarkCounts } from '../lib/db/bookmarkRepository';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import { getLastSyncStatus } from '../lib/storage/localStorage';
+import { getLastSyncStatus, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
 import type { ImportSession, LastSyncStatus } from '../shared/types';
 import '../styles/globals.css';
 
@@ -57,6 +57,17 @@ function Popup() {
     void getLastSyncStatus().then(setLastSync);
     void chrome.action?.setBadgeText?.({ text: '' });
   }, []);
+
+  useEffect(
+    () =>
+      subscribeToLocalStateChanges({
+        onLocalDataChange: () => {
+          void getBookmarkCounts().then((c) => setTotalCount(c.total));
+          void getLastSyncStatus().then(setLastSync);
+        }
+      }),
+    []
+  );
 
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
     if (importMode) {

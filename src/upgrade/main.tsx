@@ -7,7 +7,7 @@ import { createRoot } from 'react-dom/client';
 import { Button } from '../components/Button';
 import { useTheme } from '../hooks/useTheme';
 import { activateAndStoreLicense, deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
-import { emptyLicenseData } from '../lib/storage/localStorage';
+import { emptyLicenseData, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
 import type { LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
@@ -107,6 +107,14 @@ function Upgrade() {
   useEffect(() => {
     void validateStoredLicenseIfNeeded().then(setLicense);
   }, []);
+
+  useEffect(
+    () =>
+      subscribeToLocalStateChanges({
+        onLicenseChange: setLicense
+      }),
+    []
+  );
 
   async function handleActivate() {
     if (!licenseKey.trim()) {

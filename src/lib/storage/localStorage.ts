@@ -4,6 +4,7 @@ const SETTINGS_KEY = 'settings';
 const LICENSE_KEY = 'license';
 const LAST_SYNC_STATUS_KEY = 'bookmarknest:last-sync-status';
 const LAST_BACKUP_STATUS_KEY = 'bookmarknest:last-backup-status';
+const LOCAL_DATA_STATUS_KEY = 'bookmarknest:local-data-status';
 
 export const defaultSettings: Settings = {
   theme: 'system',
@@ -93,4 +94,46 @@ export async function setLastBackupStatus(status: LastBackupStatus) {
   }
 
   await chrome.storage.local.set({ [LAST_BACKUP_STATUS_KEY]: status });
+}
+
+export async function markLocalDataChanged(reason: 'backup-imported' | 'local-data-cleared' | 'library-updated') {
+  if (!hasChromeStorage()) {
+    return;
+  }
+
+  await chrome.storage.local.set({ [LOCAL_DATA_STATUS_KEY]: { at: Date.now(), reason } });
+}
+
+export function subscribeToLocalStateChanges(handlers: {
+  onLicenseChange?: (license: LicenseData) => void;
+  onLocalDataChange?: (status: { at: number; reason: string }) => void;
+  onLastBackupChange?: (status: LastBackupStatus | null) => void;
+}) {
+  if (!hasChromeStorage() || !chrome.storage?.onChanged) {
+    return () => undefined;
+  }
+
+  const listener = (changes: Record<string, chrome.storage.StorageChange>, areaName: string) => {
+    if (areaName !== 'local') {
+      return;
+    }
+
+    if (changes[LICENSE_KEY] && handlers.onLicenseChange) {
+      handlers.onLicenseChange({ ...emptyLicenseData, ...((changes[LICENSE_KEY].newValue as Partial<LicenseData> | undefined) ?? {}) });
+    }
+
+    if (changes[LOCAL_DATA_STATUS_KEY] && handlers.onLocalDataChange) {
+      const status = changes[LOCAL_DATA_STATUS_KEY].newValue as { at: number; reason: string } | undefined;
+      if (status) {
+        handlers.onLocalDataChange(status);
+      }
+    }
+
+    if (changes[LAST_BACKUP_STATUS_KEY] && handlers.onLastBackupChange) {
+      handlers.onLastBackupChange((changes[LAST_BACKUP_STATUS_KEY].newValue as LastBackupStatus | undefined) ?? null);
+    }
+  };
+
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
 }

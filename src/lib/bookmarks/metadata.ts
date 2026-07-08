@@ -28,7 +28,7 @@ export function getBookmarkSignals(bookmark: BookmarkListItem): BookmarkSignal[]
   const signals: BookmarkSignal[] = [];
 
   if (bookmark.markedForExport) {
-    signals.push({ key: 'export-queue', label: 'Export list' });
+    signals.push({ key: 'export-queue', label: 'Export picks' });
   }
   if (bookmark.mediaUrls.length > 0) {
     signals.push({ key: 'media', label: 'Media' });

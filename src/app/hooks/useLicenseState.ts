@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { isProActive } from '../../lib/license/pro';
 import { validateStoredLicenseIfNeeded } from '../../lib/license/service';
-import { emptyLicenseData } from '../../lib/storage/localStorage';
+import { emptyLicenseData, subscribeToLocalStateChanges } from '../../lib/storage/localStorage';
 import type { LicenseData } from '../../shared/types';
 
 const forcePro = import.meta.env.VITE_FORCE_PRO === 'true';
@@ -42,6 +42,16 @@ export function useLicenseState() {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  useEffect(() => {
+    if (forcePro) {
+      return;
+    }
+
+    return subscribeToLocalStateChanges({
+      onLicenseChange: setLicense
+    });
   }, []);
 
   return {

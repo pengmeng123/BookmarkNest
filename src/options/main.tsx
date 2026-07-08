@@ -14,7 +14,15 @@ import { downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
 import { deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import { emptyLicenseData, getLastBackupStatus, getSettings, saveSettings, setLastBackupStatus } from '../lib/storage/localStorage';
+import {
+  emptyLicenseData,
+  getLastBackupStatus,
+  getSettings,
+  markLocalDataChanged,
+  saveSettings,
+  setLastBackupStatus,
+  subscribeToLocalStateChanges
+} from '../lib/storage/localStorage';
 import type { ImportDiagnostics, LastBackupStatus, LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
@@ -108,6 +116,15 @@ function Options() {
     void getLastBackupStatus().then(setLastBackup);
   }, []);
 
+  useEffect(
+    () =>
+      subscribeToLocalStateChanges({
+        onLicenseChange: setLicense,
+        onLastBackupChange: setLastBackup
+      }),
+    []
+  );
+
   async function handleExportBackup() {
     if (busyAction) {
       return;
@@ -145,7 +162,8 @@ function Options() {
     try {
       const parsed = JSON.parse(await file.text()) as unknown;
       await importLocalBackup(parsed);
-      setStatus({ type: 'success', message: 'Backup imported. Reopen BookmarkNest to see the restored library.' });
+      await markLocalDataChanged('backup-imported');
+      setStatus({ type: 'success', message: 'Backup imported. Open BookmarkNest pages will refresh automatically.' });
     } catch (error) {
       setStatus({ type: 'error', message: error instanceof Error ? error.message : 'Backup import failed.' });
     } finally {
@@ -165,6 +183,7 @@ function Options() {
     setStatus(null);
     try {
       await resetDomainData();
+      await markLocalDataChanged('local-data-cleared');
       setConfirmClearOpen(false);
       setStatus({ type: 'success', message: 'Local data cleared.' });
     } catch (error) {
