@@ -1,10 +1,11 @@
-import type { LastBackupStatus, LastSyncStatus, LicenseData, Settings } from '../../shared/types';
+import type { CloudSyncStatus, LastBackupStatus, LastSyncStatus, LicenseData, Settings } from '../../shared/types';
 
 const SETTINGS_KEY = 'settings';
 const LICENSE_KEY = 'license';
 const LAST_SYNC_STATUS_KEY = 'bookmarknest:last-sync-status';
 const LAST_BACKUP_STATUS_KEY = 'bookmarknest:last-backup-status';
 const LOCAL_DATA_STATUS_KEY = 'bookmarknest:local-data-status';
+const CLOUD_SYNC_STATUS_KEY = 'bookmarknest:cloud-sync-status';
 
 export const defaultSettings: Settings = {
   theme: 'system',
@@ -12,6 +13,8 @@ export const defaultSettings: Settings = {
   language: 'en',
   autoSync: false,
   syncIntervalMinutes: 60,
+  cloudSyncEnabled: false,
+  cloudSyncIntervalMinutes: 360,
   mirrorRemovals: false
 };
 
@@ -96,6 +99,23 @@ export async function setLastBackupStatus(status: LastBackupStatus) {
   await chrome.storage.local.set({ [LAST_BACKUP_STATUS_KEY]: status });
 }
 
+export async function getCloudSyncStatus(): Promise<CloudSyncStatus | null> {
+  if (!hasChromeStorage()) {
+    return null;
+  }
+
+  const result = await chrome.storage.local.get(CLOUD_SYNC_STATUS_KEY);
+  return (result[CLOUD_SYNC_STATUS_KEY] as CloudSyncStatus | undefined) ?? null;
+}
+
+export async function setCloudSyncStatus(status: CloudSyncStatus) {
+  if (!hasChromeStorage()) {
+    return;
+  }
+
+  await chrome.storage.local.set({ [CLOUD_SYNC_STATUS_KEY]: status });
+}
+
 export async function markLocalDataChanged(reason: 'backup-imported' | 'local-data-cleared' | 'library-updated') {
   if (!hasChromeStorage()) {
     return;
@@ -104,10 +124,21 @@ export async function markLocalDataChanged(reason: 'backup-imported' | 'local-da
   await chrome.storage.local.set({ [LOCAL_DATA_STATUS_KEY]: { at: Date.now(), reason } });
 }
 
+export async function getLocalDataStatus(): Promise<{ at: number; reason: string } | null> {
+  if (!hasChromeStorage()) {
+    return null;
+  }
+
+  const result = await chrome.storage.local.get(LOCAL_DATA_STATUS_KEY);
+  return (result[LOCAL_DATA_STATUS_KEY] as { at: number; reason: string } | undefined) ?? null;
+}
+
 export function subscribeToLocalStateChanges(handlers: {
   onLicenseChange?: (license: LicenseData) => void;
   onLocalDataChange?: (status: { at: number; reason: string }) => void;
+  onLastSyncChange?: (status: LastSyncStatus | null) => void;
   onLastBackupChange?: (status: LastBackupStatus | null) => void;
+  onCloudSyncChange?: (status: CloudSyncStatus | null) => void;
 }) {
   if (!hasChromeStorage() || !chrome.storage?.onChanged) {
     return () => undefined;
@@ -129,8 +160,16 @@ export function subscribeToLocalStateChanges(handlers: {
       }
     }
 
+    if (changes[LAST_SYNC_STATUS_KEY] && handlers.onLastSyncChange) {
+      handlers.onLastSyncChange((changes[LAST_SYNC_STATUS_KEY].newValue as LastSyncStatus | undefined) ?? null);
+    }
+
     if (changes[LAST_BACKUP_STATUS_KEY] && handlers.onLastBackupChange) {
       handlers.onLastBackupChange((changes[LAST_BACKUP_STATUS_KEY].newValue as LastBackupStatus | undefined) ?? null);
+    }
+
+    if (changes[CLOUD_SYNC_STATUS_KEY] && handlers.onCloudSyncChange) {
+      handlers.onCloudSyncChange((changes[CLOUD_SYNC_STATUS_KEY].newValue as CloudSyncStatus | undefined) ?? null);
     }
   };
 

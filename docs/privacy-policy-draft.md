@@ -12,7 +12,9 @@ BookmarkNest may also store the latest import diagnostics locally. Diagnostics i
 
 ## Data Sent to Servers
 
-BookmarkNest does not upload bookmark content, research notes, saved views, authors, media URLs, tags, or folders to a server.
+BookmarkNest stores bookmark content, research notes, saved views, authors, media URLs, tags, and folders locally by default.
+
+If the user enables optional Cloud Sync, BookmarkNest creates an encrypted backup of the local library and uploads that encrypted snapshot to the Cloud Sync service. The snapshot is encrypted in the extension with a key derived from the user's License Key. Plain bookmark content, notes, saved views, authors, media URLs, tags, and folders are not sent to the Cloud Sync service.
 
 When the user starts an import or enables optional auto-sync, BookmarkNest sends authenticated requests to X/Twitter from the extension using the user's existing logged-in X session. These requests are used to read the user's X bookmarks and related profile metadata needed to display the local library.
 
@@ -25,6 +27,7 @@ Users can:
 - Delete individual local bookmark records.
 - Clear all local BookmarkNest data.
 - Export local data as a backup.
+- Enable or disable optional encrypted Cloud Sync.
 - Keep Pro-only notes and saved views stored locally after downgrade, with editing and use gated by the active plan.
 - Export local import diagnostics for support.
 - Deactivate a Pro license on the current device.

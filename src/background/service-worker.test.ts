@@ -109,7 +109,8 @@ describe('saveImportedBookmarks', () => {
     vi.stubGlobal('chrome', {
       storage: {
         local: {
-          get: vi.fn(async (key: string) => ({ [key]: { mirrorRemovals } }))
+          get: vi.fn(async (key: string) => ({ [key]: { mirrorRemovals } })),
+          set: vi.fn(async () => undefined)
         }
       }
     });

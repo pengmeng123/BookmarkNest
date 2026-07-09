@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BookmarkListItem } from '../db/bookmarkRepository';
-import { searchBookmarks, tokenizeSearchQuery } from './searchBookmarks';
+import { countSearchBookmarks, searchBookmarks, tokenizeSearchQuery } from './searchBookmarks';
 
 function item(overrides: Partial<BookmarkListItem>): BookmarkListItem {
   return {
@@ -69,5 +69,12 @@ describe('searchBookmarks', () => {
     const bookmarks = [item({ id: 'old', importedAt: 1 }), item({ id: 'new', importedAt: 3 }), item({ id: 'middle', importedAt: 2 })];
 
     expect(searchBookmarks(bookmarks, '').map((match) => match.bookmark.id)).toEqual(['new', 'middle', 'old']);
+  });
+
+  it('counts matches without building result objects', () => {
+    const bookmarks = [item({ id: 'one', contentText: 'AI startup notes' }), item({ id: 'two', contentText: 'AI research' })];
+
+    expect(countSearchBookmarks(bookmarks, 'ai')).toBe(2);
+    expect(countSearchBookmarks(bookmarks, 'ai startup')).toBe(1);
   });
 });

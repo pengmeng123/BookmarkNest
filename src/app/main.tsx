@@ -4,6 +4,8 @@ import {
   BookMarked,
   ChevronRight,
   ChevronsUpDown,
+  Cloud,
+  CloudOff,
   Download,
   ExternalLink,
   FileJson,
@@ -41,6 +43,7 @@ import { Dialog } from '../components/Dialog';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Field, SelectInput, TextInput, TextareaInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
+import { normalizeHandleSearchValue } from '../lib/bookmarks/searchText';
 import { useTheme } from '../hooks/useTheme';
 import {
   addTagToBookmarks,
@@ -50,6 +53,8 @@ import {
   deleteFolder,
   deleteSavedView,
   deleteTag,
+  getBookmarkItemsByIds,
+  getSavedViewCounts,
   moveBookmarksToFolder,
   removeTagFromBookmark,
   renameFolder,
@@ -70,13 +75,14 @@ import { getBookmarkSignals } from '../lib/bookmarks/metadata';
 import { downloadBookmarks, downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
-import { searchBookmarks, type SortKey } from '../lib/search/searchBookmarks';
-import { getLastBackupStatus, setLastBackupStatus, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
+import { tokenizeSearchQuery, type SortKey } from '../lib/search/searchBookmarks';
+import { getCloudSyncStatus, getLastBackupStatus, getLocalDataStatus, getSettings, saveSettings, setLastBackupStatus, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
 import { cn } from '../lib/utils/cn';
-import type { BookmarkFocusFilter, ImportSession, LastBackupStatus, SavedView } from '../shared/types';
+import type { BookmarkFocusFilter, CloudSyncStatus, ImportSession, LastBackupStatus, SavedView } from '../shared/types';
 import '../styles/globals.css';
 import { BookmarkList } from './components/BookmarkList';
 import { MoveDialog } from './components/MoveDialog';
+import { useBookmarkQuery } from './hooks/useBookmarkQuery';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLibraryData } from './hooks/useLibraryData';
 import { useLicenseState } from './hooks/useLicenseState';
@@ -154,13 +160,24 @@ function formatBackupDate(timestamp?: number) {
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
 }
 
+function formatCloudDate(timestamp?: number) {
+  if (!timestamp) {
+    return 'Not protected yet';
+  }
+
+  return new Intl.RelativeTimeFormat('en', { numeric: 'auto' }).format(
+    Math.round((timestamp - Date.now()) / (60 * 1000)),
+    'minute'
+  );
+}
+
 function backupFilename(timestamp: number) {
   const compactTimestamp = new Date(timestamp).toISOString().slice(0, 16).replaceAll('-', '').replaceAll(':', '').replace('T', '-');
   return `bookmarknest-backup-${compactTimestamp}.json`;
 }
 
 function normalizeAuthorQuery(value: string) {
-  return value.normalize('NFC').toLowerCase().replace(/^@/, '').trim();
+  return normalizeHandleSearchValue(value);
 }
 
 function savedViewState(savedView: SavedView): ResearchViewState {
@@ -190,51 +207,6 @@ function matchesSavedView(savedView: SavedView | undefined, state: ResearchViewS
     saved.focus === state.focus &&
     normalizeAuthorQuery(saved.authorQuery) === normalizeAuthorQuery(state.authorQuery)
   );
-}
-
-function bookmarkMatchesFocus(bookmark: BookmarkListItem, focus: BookmarkFocusFilter) {
-  if (focus === 'with-notes') {
-    return Boolean(bookmark.note?.trim());
-  }
-  if (focus === 'without-notes') {
-    return !bookmark.note?.trim();
-  }
-  if (focus === 'with-media') {
-    return bookmark.mediaUrls.length > 0;
-  }
-  if (focus === 'unfiled') {
-    return !bookmark.folderId;
-  }
-  if (focus === 'export-queue') {
-    return Boolean(bookmark.markedForExport);
-  }
-  return true;
-}
-
-function bookmarkMatchesResearchView(bookmark: BookmarkListItem, state: ResearchViewState) {
-  if (state.includeArchived ? !bookmark.archived : bookmark.archived) {
-    return false;
-  }
-  if (state.folderId === null && bookmark.folderId) {
-    return false;
-  }
-  if (state.folderId && bookmark.folderId !== state.folderId) {
-    return false;
-  }
-  if (state.tagId && !bookmark.tagIds.includes(state.tagId)) {
-    return false;
-  }
-  if (!bookmarkMatchesFocus(bookmark, state.focus)) {
-    return false;
-  }
-
-  const authorQuery = normalizeAuthorQuery(state.authorQuery);
-  if (!authorQuery) {
-    return true;
-  }
-
-  const authorText = `${bookmark.authorName} ${bookmark.authorHandle}`.normalize('NFC').toLowerCase();
-  return authorText.includes(authorQuery);
 }
 
 const DebouncedFilterInput = forwardRef<
@@ -915,43 +887,80 @@ function DataSafetyBar({
   bookmarkCount,
   savedViewCount,
   lastBackup,
+  cloudStatus,
+  cloudEnabled,
+  canUseCloudSync,
   backupBusy,
+  cloudBusy,
   backupStatus,
   onBackup,
-  onRestore
+  onRestore,
+  onEnableCloud,
+  onCloudBackup,
+  onCloudRestore,
+  onUpgrade
 }: {
   bookmarkCount: number;
   savedViewCount: number;
   lastBackup: LastBackupStatus | null;
+  cloudStatus: CloudSyncStatus | null;
+  cloudEnabled: boolean;
+  canUseCloudSync: boolean;
   backupBusy: boolean;
+  cloudBusy: boolean;
   backupStatus: ActionToast;
   onBackup: () => void;
   onRestore: () => void;
+  onEnableCloud: () => void;
+  onCloudBackup: () => void;
+  onCloudRestore: () => void;
+  onUpgrade: () => void;
 }) {
-  const backupAgeMs = lastBackup ? Date.now() - lastBackup.at : Number.POSITIVE_INFINITY;
+  const protectedAt = cloudStatus?.lastSuccessAt ?? lastBackup?.at;
+  const backupAgeMs = protectedAt ? Date.now() - protectedAt : Number.POSITIVE_INFINITY;
   const stale = bookmarkCount > 0 && backupAgeMs > 7 * 24 * 60 * 60 * 1000;
+  const cloudActive = canUseCloudSync && cloudEnabled;
+  const cloudAttention = cloudStatus?.phase === 'attention';
+  const cloudCopy = !canUseCloudSync
+    ? 'Upgrade to protect this local library with encrypted Cloud Sync.'
+    : cloudActive
+      ? cloudAttention
+        ? cloudStatus?.lastError ?? 'Cloud Sync needs attention.'
+        : `Encrypted cloud backup ${formatCloudDate(cloudStatus?.lastSuccessAt)}.`
+      : 'Cloud Sync is ready. Turn it on to protect this library automatically.';
 
-  if (lastBackup && !stale) {
+  if ((lastBackup || cloudStatus?.lastSuccessAt) && !stale && !cloudAttention) {
     return (
       <div className="border-b border-border bg-[#eef5f3] px-4 py-2.5 text-sm dark:bg-[#101816]">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-primary">
-              <ShieldCheck size={13} />
-              Data safety
+              {cloudActive ? <Cloud size={13} /> : <ShieldCheck size={13} />}
+              {cloudActive ? 'Cloud sync' : 'Data safety'}
             </span>
-            <span className="text-muted-foreground">Backed up {formatBackupDate(lastBackup.at)}</span>
+            <span className="text-muted-foreground">{cloudCopy}</span>
             <span className="text-xs text-muted-foreground">
-              {lastBackup.bookmarkCount} bookmarks, {lastBackup.savedViewCount} views
+              {cloudStatus?.bookmarkCount ?? lastBackup?.bookmarkCount ?? bookmarkCount} bookmarks, {cloudStatus?.savedViewCount ?? lastBackup?.savedViewCount ?? savedViewCount} views
             </span>
             {backupStatus ? (
               <span className={cn('text-xs', backupStatus.type === 'error' ? 'text-danger' : 'text-primary')}>{backupStatus.message}</span>
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {cloudActive ? (
+              <Button size="xs" variant="ghost" onClick={onCloudBackup} disabled={cloudBusy || bookmarkCount === 0}>
+                {cloudBusy ? <LoaderCircle size={13} className="animate-spin" /> : <Cloud size={13} />}
+                Protect now
+              </Button>
+            ) : (
+              <Button size="xs" variant="ghost" onClick={canUseCloudSync ? onEnableCloud : onUpgrade}>
+                {canUseCloudSync ? <Cloud size={13} /> : <Lock size={13} />}
+                {canUseCloudSync ? 'Turn on cloud' : 'Upgrade'}
+              </Button>
+            )}
             <Button size="xs" variant="ghost" onClick={onBackup} disabled={backupBusy || bookmarkCount === 0}>
               {backupBusy ? <LoaderCircle size={13} className="animate-spin" /> : <Download size={13} />}
-              Backup
+              File backup
             </Button>
             <Button size="xs" variant="ghost" onClick={onRestore}>
               Restore
@@ -968,10 +977,10 @@ function DataSafetyBar({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className={cn('inline-flex h-7 items-center gap-1.5 px-2.5 text-xs font-semibold', stale ? 'bg-accent/12 text-accent' : 'bg-primary/10 text-primary')}>
-              <ShieldCheck size={13} />
-              Data safety
+              {cloudActive ? <Cloud size={13} /> : <CloudOff size={13} />}
+              {cloudActive ? 'Cloud sync' : 'Data safety'}
             </span>
-            <span className="text-sm font-medium text-foreground">{formatBackupDate(lastBackup?.at)}</span>
+            <span className="text-sm font-medium text-foreground">{cloudActive ? cloudCopy : formatBackupDate(lastBackup?.at)}</span>
             {lastBackup ? (
               <span className="text-xs text-muted-foreground">
                 {lastBackup.bookmarkCount} bookmarks, {lastBackup.savedViewCount} views
@@ -979,7 +988,7 @@ function DataSafetyBar({
             ) : null}
           </div>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-            Chrome removes extension data on uninstall. Keep a full backup file before reinstalling, switching browsers, or clearing local data.
+            Chrome removes extension data on uninstall. Cloud Sync keeps an encrypted backup tied to your License Key, while file backup gives you an offline copy.
             Current library: {bookmarkCount} bookmarks and {savedViewCount} saved views.
           </p>
           {backupStatus ? (
@@ -987,9 +996,25 @@ function DataSafetyBar({
           ) : null}
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
+          {cloudActive ? (
+            <>
+              <Button size="sm" variant="primary" onClick={onCloudBackup} disabled={cloudBusy || bookmarkCount === 0}>
+                {cloudBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Cloud size={14} />}
+                {cloudBusy ? 'Protecting...' : 'Protect now'}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={onCloudRestore} disabled={cloudBusy}>
+                Restore from cloud
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" variant="primary" onClick={canUseCloudSync ? onEnableCloud : onUpgrade}>
+              {canUseCloudSync ? <Cloud size={14} /> : <Lock size={14} />}
+              {canUseCloudSync ? 'Turn on Cloud Sync' : 'Upgrade for Cloud Sync'}
+            </Button>
+          )}
           <Button size="sm" variant="primary" onClick={onBackup} disabled={backupBusy || bookmarkCount === 0}>
             {backupBusy ? <LoaderCircle size={14} className="animate-spin" /> : <Download size={14} />}
-            {backupBusy ? 'Backing up...' : 'Backup now'}
+            {backupBusy ? 'Backing up...' : 'File backup'}
           </Button>
           <Button size="sm" variant="secondary" onClick={onRestore}>
             <Upload size={14} />
@@ -1326,15 +1351,20 @@ function App() {
   const [noteStatus, setNoteStatus] = useState<string | null>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [lastBackup, setLastBackup] = useState<LastBackupStatus | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
+  const [cloudEnabled, setCloudEnabled] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [cloudBusy, setCloudBusy] = useState(false);
   const [backupStatus, setBackupStatus] = useState<ActionToast>(null);
+  const [savedViewCounts, setSavedViewCounts] = useState<Record<string, number>>({});
   const debouncedSearchQuery = searchQuery;
   const debouncedAuthorQuery = authorQuery;
   const workspaceTopRef = useRef<HTMLElement>(null);
   const pendingScrollRestoreRef = useRef<number | null>(null);
+  const lastSeenLocalDataAtRef = useRef(0);
   const { isPro, license } = useLicenseState();
   const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived }), [folderId, tagId, includeArchived]);
-  const library = useLibraryData(filters);
+  const library = useLibraryData();
   const refreshLibrary = library.refresh;
   const currentViewState = useMemo<ResearchViewState>(
     () => ({
@@ -1348,9 +1378,18 @@ function App() {
     }),
     [debouncedSearchQuery, sortKey, folderId, tagId, includeArchived, focusFilter, debouncedAuthorQuery]
   );
+  const bookmarkQuery = useBookmarkQuery({
+    filters,
+    focus: focusFilter,
+    authorQuery: debouncedAuthorQuery,
+    query: debouncedSearchQuery,
+    sortKey,
+    revision: library.revision
+  });
+  const matchedTerms = useMemo(() => tokenizeSearchQuery(currentViewState.query), [currentViewState.query]);
   const searchMatches = useMemo(
-    () => searchBookmarks(library.allBookmarks.filter((bookmark) => bookmarkMatchesResearchView(bookmark, currentViewState)), currentViewState.query, currentViewState.sortKey),
-    [library.allBookmarks, currentViewState]
+    () => bookmarkQuery.bookmarks.map((bookmark) => ({ bookmark, matchedTerms })),
+    [bookmarkQuery.bookmarks, matchedTerms]
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const canManageSavedViews = canUseCapability(license, 'saved-views');
@@ -1358,35 +1397,12 @@ function App() {
   const canUseBulkActions = canUseCapability(license, 'bulk-actions');
   const canExportMarkdown = canUseCapability(license, 'markdown-export');
   const canExportCsv = canUseCapability(license, 'csv-export');
+  const canUseCloudSync = canUseCapability(license, 'cloud-sync');
+  const loadedBookmarks = bookmarkQuery.bookmarks;
   const activeBookmark = searchMatches.find((match) => match.bookmark.id === activeBookmarkId)?.bookmark ?? searchMatches[0]?.bookmark;
   const activeSavedView = library.savedViews.find((savedView) => savedView.id === activeViewId);
   const activeViewDirty = Boolean(activeSavedView && !matchesSavedView(activeSavedView, currentViewState));
-  const viewSummary = useMemo(() => {
-    let withNotes = 0;
-    let queued = 0;
-
-    for (const match of searchMatches) {
-      if (match.bookmark.note?.trim()) {
-        withNotes += 1;
-      }
-      if (match.bookmark.markedForExport) {
-        queued += 1;
-      }
-    }
-
-    return { withNotes, queued };
-  }, [searchMatches]);
-  const savedViewCounts = useMemo(
-    () =>
-      Object.fromEntries(
-        library.savedViews.map((savedView) => {
-          const state = savedViewState(savedView);
-          const matches = searchBookmarks(library.allBookmarks.filter((bookmark) => bookmarkMatchesResearchView(bookmark, state)), state.query, state.sortKey);
-          return [savedView.id, matches.length];
-        })
-      ),
-    [library.allBookmarks, library.savedViews]
-  );
+  const viewSummary = bookmarkQuery.viewSummary;
   const { focusedIndex } = useKeyboardNavigation({
     itemCount: searchMatches.length,
     searchInputRef,
@@ -1452,6 +1468,33 @@ function App() {
   }, [activeBookmarkId, searchMatches]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    if (library.savedViews.length === 0) {
+      setSavedViewCounts({});
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getSavedViewCounts(library.savedViews)
+      .then((counts) => {
+        if (!cancelled) {
+          setSavedViewCounts(counts);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSavedViewCounts({});
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [library.revision, library.savedViews]);
+
+  useEffect(() => {
     setNoteStatus(null);
   }, [activeBookmark?.id, activeBookmark?.note]);
 
@@ -1479,12 +1522,15 @@ function App() {
 
   useEffect(() => {
     void getLastBackupStatus().then(setLastBackup);
+    void getCloudSyncStatus().then(setCloudStatus);
+    void getSettings().then((settings) => setCloudEnabled(settings.cloudSyncEnabled));
   }, []);
 
   useEffect(
     () =>
       subscribeToLocalStateChanges({
         onLocalDataChange: (status) => {
+          lastSeenLocalDataAtRef.current = status.at;
           void refreshLibrary();
           setSelectedIds(new Set());
           setActiveBookmarkId(null);
@@ -1493,10 +1539,40 @@ function App() {
             message: status.reason === 'local-data-cleared' ? 'Local library cleared.' : 'Local library refreshed.'
           });
         },
-        onLastBackupChange: setLastBackup
+        onLastBackupChange: setLastBackup,
+        onCloudSyncChange: setCloudStatus
       }),
     [refreshLibrary]
   );
+
+  useEffect(() => {
+    async function refreshIfLocalDataChanged() {
+      const status = await getLocalDataStatus();
+      if (!status || status.at <= lastSeenLocalDataAtRef.current) {
+        return;
+      }
+
+      lastSeenLocalDataAtRef.current = status.at;
+      await refreshLibrary();
+      setSelectedIds(new Set());
+      setActiveBookmarkId(null);
+    }
+
+    function handleVisibilityOrFocus() {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      void refreshIfLocalDataChanged();
+    }
+
+    void refreshIfLocalDataChanged();
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [refreshLibrary]);
 
   useEffect(() => {
     function handleScroll() {
@@ -1803,9 +1879,10 @@ function App() {
       return;
     }
     await runDialogAction(async () => {
+      const bookmarksById = new Map((await getBookmarkItemsByIds(moveTargetIds)).map((bookmark) => [bookmark.id, bookmark]));
       const previousFolders = moveTargetIds.map((bookmarkId) => ({
         bookmarkId,
-        folderId: library.bookmarks.find((bookmark) => bookmark.id === bookmarkId)?.folderId
+        folderId: bookmarksById.get(bookmarkId)?.folderId
       }));
       await refreshAfter(moveBookmarksToFolder(moveTargetIds, targetFolderId));
       setMoveTargetIds(null);
@@ -1826,9 +1903,10 @@ function App() {
     }
     await runDialogAction(async () => {
       const targetIds = [...moveTargetIds];
+      const bookmarksById = new Map((await getBookmarkItemsByIds(targetIds)).map((bookmark) => [bookmark.id, bookmark]));
       const previousFolders = targetIds.map((bookmarkId) => ({
         bookmarkId,
-        folderId: library.bookmarks.find((bookmark) => bookmark.id === bookmarkId)?.folderId
+        folderId: bookmarksById.get(bookmarkId)?.folderId
       }));
       const existing = library.folders.find((folder) => folder.name.toLowerCase() === folderName.toLowerCase());
       const folder = existing ?? (await createFolder(folderName));
@@ -1867,7 +1945,7 @@ function App() {
   }
 
   function handleRemoveTag(bookmarkId: string) {
-    const bookmark = library.bookmarks.find((item) => item.id === bookmarkId);
+    const bookmark = loadedBookmarks.find((item) => item.id === bookmarkId);
     if (!bookmark?.tags.length) {
       return;
     }
@@ -1883,7 +1961,7 @@ function App() {
 
     await runDialogAction(async () => {
       if (tagDialog.kind === 'remove') {
-        const bookmark = library.bookmarks.find((item) => item.id === tagDialog.bookmarkId);
+        const bookmark = loadedBookmarks.find((item) => item.id === tagDialog.bookmarkId);
         const tag = bookmark?.tags.find((item) => item.name.toLowerCase() === tagName.toLowerCase());
         if (tag && bookmark) {
           await refreshAfter(removeTagFromBookmark(bookmark.id, tag.id));
@@ -1954,7 +2032,7 @@ function App() {
   }
 
   async function handleExport(format: AppExportFormat) {
-    const bookmarks = searchMatches.map((match) => match.bookmark);
+    const bookmarks = await bookmarkQuery.listAllItems();
     if (bookmarks.length === 0) {
       return;
     }
@@ -2004,6 +2082,69 @@ function App() {
     }
   }
 
+  async function handleEnableCloudSync() {
+    if (!canUseCloudSync) {
+      openUpgrade();
+      return;
+    }
+
+    setCloudEnabled(true);
+    await saveSettings({ cloudSyncEnabled: true });
+    await handleCloudBackup();
+  }
+
+  async function handleCloudBackup() {
+    if (cloudBusy) {
+      return;
+    }
+    if (!canUseCloudSync) {
+      openUpgrade();
+      return;
+    }
+
+    setCloudBusy(true);
+    setBackupStatus(null);
+    try {
+      const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RUN_CLOUD_BACKUP' });
+      if (!response.ok || !response.data) {
+        setBackupStatus({ type: 'error', message: response.error ?? 'Cloud Sync failed.' });
+        return;
+      }
+      setCloudStatus(response.data);
+      setBackupStatus({
+        type: 'success',
+        message: response.data.lastUploadResult === 'unchanged' ? 'Cloud backup already up to date.' : 'Cloud backup protected.'
+      });
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
+  async function handleCloudRestore() {
+    if (cloudBusy) {
+      return;
+    }
+    if (!canUseCloudSync) {
+      openUpgrade();
+      return;
+    }
+
+    setCloudBusy(true);
+    setBackupStatus(null);
+    try {
+      const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RESTORE_CLOUD_BACKUP' });
+      if (!response.ok || !response.data) {
+        setBackupStatus({ type: 'error', message: response.error ?? 'Cloud restore failed.' });
+        return;
+      }
+      setCloudStatus(response.data);
+      await library.refresh();
+      setBackupStatus({ type: 'success', message: 'Cloud backup restored.' });
+    } finally {
+      setCloudBusy(false);
+    }
+  }
+
   async function handleImport(mode: 'visible' | 'auto-scroll' = 'auto-scroll') {
     if (importMode) {
       return;
@@ -2031,7 +2172,7 @@ function App() {
         session
           ? {
               type: 'success',
-              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} found.`
+              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
             }
           : { type: 'success', message: 'Import complete.' }
       );
@@ -2052,18 +2193,19 @@ function App() {
     });
   }
 
-  function handleSelectAllVisible() {
-    setSelectedIds(new Set(searchMatches.map((match) => match.bookmark.id)));
+  async function handleSelectAllVisible() {
+    setSelectedIds(new Set(await bookmarkQuery.listAllIds()));
   }
 
-  function handleInvertVisibleSelection() {
+  async function handleInvertVisibleSelection() {
+    const bookmarkIds = await bookmarkQuery.listAllIds();
     setSelectedIds((current) => {
       const next = new Set(current);
-      for (const { bookmark } of searchMatches) {
-        if (next.has(bookmark.id)) {
-          next.delete(bookmark.id);
+      for (const bookmarkId of bookmarkIds) {
+        if (next.has(bookmarkId)) {
+          next.delete(bookmarkId);
         } else {
-          next.add(bookmark.id);
+          next.add(bookmarkId);
         }
       }
       return next;
@@ -2164,7 +2306,7 @@ function App() {
   }
 
   const visibleTagOptions = tagDialog?.kind === 'remove'
-    ? (library.bookmarks.find((item) => item.id === tagDialog.bookmarkId)?.tags ?? [])
+    ? (loadedBookmarks.find((item) => item.id === tagDialog.bookmarkId)?.tags ?? [])
     : library.tags;
   const selectedCount = selectedIds.size;
 
@@ -2233,10 +2375,18 @@ function App() {
             bookmarkCount={library.counts.total}
             savedViewCount={library.savedViews.length}
             lastBackup={lastBackup}
+            cloudStatus={cloudStatus}
+            cloudEnabled={cloudEnabled}
+            canUseCloudSync={canUseCloudSync}
             backupBusy={backupBusy}
+            cloudBusy={cloudBusy}
             backupStatus={backupStatus}
             onBackup={() => void handleFullBackup()}
             onRestore={() => void chrome.runtime?.openOptionsPage?.()}
+            onEnableCloud={() => void handleEnableCloudSync()}
+            onCloudBackup={() => void handleCloudBackup()}
+            onCloudRestore={() => void handleCloudRestore()}
+            onUpgrade={openUpgrade}
           />
 
           <div className="border-b border-border bg-surface px-4 py-4">
@@ -2301,7 +2451,7 @@ function App() {
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                   <span className="inline-flex items-center gap-2 text-foreground">
                     <BookMarked size={14} className="text-primary" />
-                    <span className="text-base font-semibold tabular-nums">{searchMatches.length}</span>
+                    <span className="text-base font-semibold tabular-nums">{bookmarkQuery.totalCount}</span>
                     <span className="text-sm text-muted-foreground">in view</span>
                   </span>
                   <span className="inline-flex items-center gap-2 text-muted-foreground">
@@ -2346,7 +2496,7 @@ function App() {
                   {importMode === 'auto-scroll' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
                   {importMode === 'auto-scroll' ? 'Loading...' : 'Import more'}
                 </Button>
-                <ExportMenu disabled={searchMatches.length === 0} onExport={(format) => void handleExport(format)} />
+                <ExportMenu disabled={bookmarkQuery.totalCount === 0} onExport={(format) => void handleExport(format)} />
               </div>
             </div>
           </div>
@@ -2394,9 +2544,11 @@ function App() {
 
           <BookmarkList
             matches={searchMatches}
-            totalCount={library.counts.total}
-            loading={library.loading}
-            error={library.error}
+            totalCount={bookmarkQuery.totalCount}
+            hasMore={bookmarkQuery.hasMore}
+            loadingMore={bookmarkQuery.loadingMore}
+            loading={library.loading || bookmarkQuery.loading}
+            error={bookmarkQuery.error ?? library.error}
             hasSearchQuery={Boolean(debouncedSearchQuery.trim())}
             focusedIndex={focusedIndex}
             activeBookmarkId={activeBookmark?.id}
@@ -2410,6 +2562,7 @@ function App() {
             onToggleExportQueue={(bookmarkId, markedForExport) => void handleToggleExportQueue(bookmarkId, markedForExport)}
             selectedIds={selectedIds}
             onSelectedChange={handleSelectedChange}
+            onLoadMore={() => void bookmarkQuery.loadMore()}
           />
         </div>
 

@@ -28,7 +28,7 @@ const proFeatures = [
   'Bookmark notes inside the research desk',
   'Markdown and CSV export',
   'Bulk select, move, tag, and delete',
-  'Background sync and mirror removals',
+  'Background sync, mirror removals, and encrypted cloud backup',
   'Future Pro feature updates'
 ];
 
@@ -47,7 +47,7 @@ const workflows = [
   },
   {
     title: 'Local-first by default',
-    description: 'Bookmark content is stored in your browser extension storage unless you export it yourself.'
+    description: 'Bookmark content stays in browser storage by default, with optional encrypted Cloud Sync for backup and restore.'
   }
 ];
 
@@ -163,7 +163,7 @@ function Upgrade() {
               Upgrade BookmarkNest when your X bookmarks become working research.
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-muted-foreground">
-              Free keeps the full library readable and organized. Pro adds saved views, notes, exports, and sync for serious X research.
+              Free keeps the full local library readable and organized. Pro adds saved views, notes, exports, background sync, and encrypted cloud backup for serious X research.
             </p>
           </div>
           <div className="rounded-app border border-border bg-surface p-4 shadow-sm">

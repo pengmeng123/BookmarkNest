@@ -95,12 +95,6 @@ export const BookmarkCard = memo(function BookmarkCard({
   const hiddenTagCount = Math.max(0, bookmark.tags.length - visibleTags.length);
 
   useEffect(() => {
-    if (focused) {
-      cardRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [focused]);
-
-  useEffect(() => {
     if (!menuOpen) {
       return;
     }

@@ -35,11 +35,11 @@ The extension must run under Manifest V3, avoid remote executable code, minimize
 
    Alternative considered: raw IndexedDB or `idb`. Both are viable, but Dexie reduces boilerplate for filtering, paging, and migrations.
 
-3. **Store imported-but-locked free data**
+3. **Keep the full local library available on Free**
 
-   Free users can import more than 200 bookmarks, but only the latest 200 undeleted bookmarks are manageable. Locked records stay in IndexedDB and become visible immediately after Pro activation. This preserves user effort and makes upgrade behavior clear.
+   Free users can import, browse, search, and organize the full local library. Pro conversion comes from higher-value workflows: research notes, saved views, Markdown/CSV exports, bulk actions, background sync, mirror removals, and encrypted Cloud Sync.
 
-   Alternative considered: stop saving after 200 records. That is simpler but creates data loss perception and forces re-import after purchase.
+   Alternative considered: lock records after the latest 200 undeleted bookmarks. That creates a clearer quantity paywall, but it adds product friction, weakens the local-first promise, and can make users feel their imported data is being held back.
 
 4. **Soft delete for item deletion**
 

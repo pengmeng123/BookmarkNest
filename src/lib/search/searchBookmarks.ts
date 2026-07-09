@@ -1,4 +1,5 @@
 import type { BookmarkListItem } from '../db/bookmarkRepository';
+import { buildBookmarkSearchText, normalizeHandleSearchValue } from '../bookmarks/searchText';
 import type { BookmarkSortKey } from '../../shared/types';
 
 export type SortKey = BookmarkSortKey;
@@ -8,23 +9,9 @@ export interface SearchMatch {
   matchedTerms: string[];
 }
 
-function normalize(value: string) {
-  return value.normalize('NFC').toLowerCase().replace(/^@/, '').trim();
-}
-
-function buildSearchText(bookmark: BookmarkListItem) {
-  return [
-    bookmark.contentText,
-    bookmark.note ?? '',
-    bookmark.authorName,
-    bookmark.authorHandle,
-    `@${bookmark.authorHandle}`,
-    bookmark.folder?.name ?? '',
-    ...bookmark.tags.map((tag) => tag.name)
-  ]
-    .join(' ')
-    .normalize('NFC')
-    .toLowerCase();
+function matchesTerms(bookmark: BookmarkListItem, terms: string[]) {
+  const searchText = bookmark.searchText ?? buildBookmarkSearchText(bookmark);
+  return terms.every((term) => searchText.includes(term));
 }
 
 function compareBySourceOrder(left: BookmarkListItem, right: BookmarkListItem) {
@@ -57,7 +44,7 @@ function getComparator(sortKey: SortKey) {
 export function tokenizeSearchQuery(query: string) {
   return query
     .split(/\s+/)
-    .map(normalize)
+    .map(normalizeHandleSearchValue)
     .filter(Boolean);
 }
 
@@ -73,10 +60,23 @@ export function searchBookmarks(bookmarks: BookmarkListItem[], query: string, so
   }
 
   return bookmarks
-    .filter((bookmark) => {
-      const searchText = buildSearchText(bookmark);
-      return terms.every((term) => searchText.includes(term));
-    })
+    .filter((bookmark) => matchesTerms(bookmark, terms))
     .sort(comparator)
     .map((bookmark) => ({ bookmark, matchedTerms: terms }));
+}
+
+export function countSearchBookmarks(bookmarks: BookmarkListItem[], query: string) {
+  const terms = tokenizeSearchQuery(query);
+  if (terms.length === 0) {
+    return bookmarks.length;
+  }
+
+  let count = 0;
+  for (const bookmark of bookmarks) {
+    if (matchesTerms(bookmark, terms)) {
+      count += 1;
+    }
+  }
+
+  return count;
 }

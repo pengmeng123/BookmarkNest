@@ -7,7 +7,8 @@ export type ProCapability =
   | 'csv-export'
   | 'bulk-actions'
   | 'auto-sync'
-  | 'mirror-removals';
+  | 'mirror-removals'
+  | 'cloud-sync';
 
 export function isProActive(license: LicenseData) {
   return license.pro && (license.validationStatus === 'valid' || license.validationStatus === 'offline');

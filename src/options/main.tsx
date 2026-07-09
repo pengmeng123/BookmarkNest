@@ -1,12 +1,12 @@
 import '../lib/utils/translateGuard';
-import { AlertTriangle, Download, KeyRound, LoaderCircle, ShieldCheck, Trash2, Upload } from 'lucide-react';
-import { StrictMode, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, Cloud, CloudOff, Download, KeyRound, LoaderCircle, ShieldCheck, Trash2, Upload } from 'lucide-react';
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { Dialog } from '../components/Dialog';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { Field, SelectInput } from '../components/Field';
+import { Field, SelectInput, TextInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
 import { useTheme } from '../hooks/useTheme';
 import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
@@ -16,17 +16,20 @@ import { deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/l
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import {
   emptyLicenseData,
+  getCloudSyncStatus,
   getLastBackupStatus,
+  getLastSyncStatus,
   getSettings,
   markLocalDataChanged,
   saveSettings,
   setLastBackupStatus,
   subscribeToLocalStateChanges
 } from '../lib/storage/localStorage';
-import type { ImportDiagnostics, LastBackupStatus, LicenseData } from '../shared/types';
+import type { AutoSyncStatus, CloudSyncStatus, ImportDiagnostics, LastBackupStatus, LastSyncStatus, LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
 type Status = { type: 'success' | 'error'; message: string } | null;
+type BusyAction = 'export' | 'import' | 'clear' | 'diagnostics' | 'x-sync' | 'cloud-backup' | 'cloud-restore' | null;
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -42,6 +45,53 @@ function formatBackupDate(timestamp?: number) {
   }
 
   return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
+}
+
+function formatRelativeTime(timestamp: number) {
+  const minutes = Math.round((Date.now() - timestamp) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
+function formatFutureTime(timestamp?: number) {
+  if (!timestamp) {
+    return 'Not scheduled';
+  }
+
+  const minutes = Math.max(0, Math.round((timestamp - Date.now()) / 60000));
+  if (minutes < 1) return 'due now';
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `in ${hours} h`;
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp);
+}
+
+function describeLastSync(sync: LastSyncStatus | null) {
+  if (!sync) {
+    return 'No API sync has run yet.';
+  }
+
+  if (!sync.ok) {
+    return `Last sync failed ${formatRelativeTime(sync.at)}: ${sync.error ?? 'Unknown error.'}`;
+  }
+
+  const libraryCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
+  const parts = libraryCount != null ? [`${libraryCount} in library`] : [];
+  parts.push(`${sync.inserted ?? 0} new`);
+  if (sync.duplicate != null) {
+    parts.push(`${sync.duplicate} duplicate`);
+  }
+  if (sync.failed) {
+    parts.push(`${sync.failed} failed`);
+  }
+  if (sync.removed) {
+    parts.push(`${sync.removed} removed`);
+  }
+  parts.push(`${sync.found ?? 0} fetched`);
+  return `Last sync ${formatRelativeTime(sync.at)}: ${parts.join(', ')}.`;
 }
 
 function backupFilename(timestamp: number) {
@@ -82,10 +132,16 @@ function Options() {
   const { theme, setTheme } = useTheme();
   const importInputRef = useRef<HTMLInputElement>(null);
   const [status, setStatus] = useState<Status>(null);
-  const [busyAction, setBusyAction] = useState<'export' | 'import' | 'clear' | 'diagnostics' | null>(null);
+  const [busyAction, setBusyAction] = useState<BusyAction>(null);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [autoSync, setAutoSync] = useState(false);
   const [syncInterval, setSyncInterval] = useState(60);
+  const [lastSync, setLastSync] = useState<LastSyncStatus | null>(null);
+  const [autoSyncStatus, setAutoSyncStatus] = useState<AutoSyncStatus | null>(null);
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState(false);
+  const [cloudSyncInterval, setCloudSyncInterval] = useState(360);
+  const [cloudSyncDeviceName, setCloudSyncDeviceName] = useState('');
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus | null>(null);
   const [mirrorRemovals, setMirrorRemovals] = useState(false);
   const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
   const [lastBackup, setLastBackup] = useState<LastBackupStatus | null>(null);
@@ -101,6 +157,7 @@ function Options() {
 
   const canUseAutoSync = canUseCapability(license, 'auto-sync');
   const canUseMirrorRemovals = canUseCapability(license, 'mirror-removals');
+  const canUseCloudSync = canUseCapability(license, 'cloud-sync');
 
   function openUpgrade() {
     void sendRuntimeMessage({ type: 'OPEN_UPGRADE' });
@@ -110,20 +167,109 @@ function Options() {
     void getSettings().then((s) => {
       setAutoSync(s.autoSync);
       setSyncInterval(s.syncIntervalMinutes);
+      setCloudSyncEnabled(s.cloudSyncEnabled);
+      setCloudSyncInterval(s.cloudSyncIntervalMinutes);
+      setCloudSyncDeviceName(s.cloudSyncDeviceName ?? '');
       setMirrorRemovals(s.mirrorRemovals);
     });
     void validateStoredLicenseIfNeeded().then(setLicense);
+    void getLastSyncStatus().then(setLastSync);
     void getLastBackupStatus().then(setLastBackup);
+    void getCloudSyncStatus().then(setCloudSyncStatus);
   }, []);
+
+  const refreshAutoSyncStatus = useCallback(async () => {
+    const response = await sendRuntimeMessage<AutoSyncStatus>({ type: 'GET_AUTO_SYNC_STATUS' });
+    if (response.ok && response.data) {
+      setAutoSyncStatus(response.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshAutoSyncStatus();
+  }, [autoSync, syncInterval, refreshAutoSyncStatus]);
 
   useEffect(
     () =>
       subscribeToLocalStateChanges({
         onLicenseChange: setLicense,
-        onLastBackupChange: setLastBackup
+        onLastSyncChange: setLastSync,
+        onLastBackupChange: setLastBackup,
+        onCloudSyncChange: setCloudSyncStatus
       }),
     []
   );
+
+  async function handleRunXSyncNow() {
+    if (busyAction) {
+      return;
+    }
+
+    setBusyAction('x-sync');
+    setStatus(null);
+    try {
+      const response = await sendRuntimeMessage<{ session?: { insertedCount: number; duplicateCount: number; failedCount: number; foundCount: number }; removedCount?: number }>({ type: 'RUN_X_API_IMPORT' });
+      await getLastSyncStatus().then(setLastSync);
+      await refreshAutoSyncStatus();
+      if (!response.ok) {
+        setStatus({ type: 'error', message: response.error ?? 'X API sync failed.' });
+        return;
+      }
+
+      const session = response.data?.session;
+      setStatus({
+        type: 'success',
+        message: session
+          ? `X API sync complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
+          : 'X API sync complete.'
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleCloudBackup() {
+    if (busyAction) {
+      return;
+    }
+
+    setBusyAction('cloud-backup');
+    setStatus(null);
+    try {
+      const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RUN_CLOUD_BACKUP' });
+      if (!response.ok || !response.data) {
+        setStatus({ type: 'error', message: response.error ?? 'Cloud Sync failed.' });
+        return;
+      }
+      setCloudSyncStatus(response.data);
+      setStatus({
+        type: 'success',
+        message: response.data.lastUploadResult === 'unchanged' ? 'Cloud backup already up to date.' : 'Cloud backup protected.'
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleCloudRestore() {
+    if (busyAction) {
+      return;
+    }
+
+    setBusyAction('cloud-restore');
+    setStatus(null);
+    try {
+      const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RESTORE_CLOUD_BACKUP' });
+      if (!response.ok || !response.data) {
+        setStatus({ type: 'error', message: response.error ?? 'Cloud restore failed.' });
+        return;
+      }
+      setCloudSyncStatus(response.data);
+      setStatus({ type: 'success', message: 'Cloud backup restored. Open BookmarkNest pages will refresh automatically.' });
+    } finally {
+      setBusyAction(null);
+    }
+  }
 
   async function handleExportBackup() {
     if (busyAction) {
@@ -266,7 +412,7 @@ function Options() {
                 onChange={(e) => {
                   const next = e.target.checked;
                   setAutoSync(next);
-                  void saveSettings({ autoSync: next });
+                  void saveSettings({ autoSync: next }).then(refreshAutoSyncStatus);
                 }}
                 className="h-4 w-4 rounded border-border accent-primary"
               />
@@ -278,6 +424,19 @@ function Options() {
                 Upgrade to unlock background sync
               </button>
             ) : null}
+            <div className="border border-border/70 bg-background/60 px-3 py-2 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className={lastSync?.ok === false ? 'font-medium text-danger' : 'font-medium text-foreground'}>
+                  {describeLastSync(lastSync)}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Next: {autoSyncStatus?.enabled ? formatFutureTime(autoSyncStatus.nextRunAt) : 'Off'}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Auto-sync runs only while Chrome can run extension alarms and your X session is still signed in.
+              </p>
+            </div>
             {autoSync ? (
               <Field label="Sync interval">
                 <SelectInput
@@ -285,9 +444,10 @@ function Options() {
                   onChange={(e) => {
                     const next = Number(e.target.value);
                     setSyncInterval(next);
-                    void saveSettings({ syncIntervalMinutes: next });
+                    void saveSettings({ syncIntervalMinutes: next }).then(refreshAutoSyncStatus);
                   }}
                 >
+                  <option value="2">Every 2 minutes (testing)</option>
                   <option value="30">Every 30 minutes</option>
                   <option value="60">Every hour</option>
                   <option value="180">Every 3 hours</option>
@@ -297,6 +457,103 @@ function Options() {
                 </SelectInput>
               </Field>
             ) : null}
+            <Button size="sm" onClick={() => void handleRunXSyncNow()} disabled={!canUseAutoSync || Boolean(busyAction)}>
+              {busyAction === 'x-sync' ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}
+              {busyAction === 'x-sync' ? 'Syncing...' : 'Sync now'}
+            </Button>
+          </div>
+        </div>
+        <div className="rounded-app border border-border bg-surface p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Cloud Sync</h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Protect the local research desk with encrypted cloud backups, then restore it after reinstalling or switching devices.
+              </p>
+            </div>
+            <span className="inline-flex h-7 shrink-0 items-center gap-1.5 border border-primary/20 bg-primary/5 px-2 text-xs font-medium text-primary">
+              {cloudSyncEnabled && canUseCloudSync ? <Cloud size={13} /> : <CloudOff size={13} />}
+              {cloudSyncEnabled && canUseCloudSync ? 'On' : 'Off'}
+            </span>
+          </div>
+          <div className="mt-3 border border-border/70 bg-background/60 px-3 py-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <ShieldCheck size={15} className={cloudSyncStatus?.phase === 'attention' ? 'text-danger' : 'text-primary'} />
+              <span className="font-medium">
+                {cloudSyncStatus?.phase === 'attention'
+                  ? 'Needs attention'
+                  : cloudSyncStatus?.lastSuccessAt
+                    ? `Last protected ${formatBackupDate(cloudSyncStatus.lastSuccessAt)}`
+                    : 'Not protected yet'}
+              </span>
+            </div>
+            {cloudSyncStatus?.lastError ? <p className="mt-1 text-xs text-danger">{cloudSyncStatus.lastError}</p> : null}
+            {cloudSyncStatus?.bookmarkCount != null ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {cloudSyncStatus.bookmarkCount} bookmarks, {cloudSyncStatus.savedViewCount ?? 0} saved views.
+              </p>
+            ) : null}
+          </div>
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={cloudSyncEnabled}
+                disabled={!canUseCloudSync}
+                onChange={(e) => {
+                  const next = e.target.checked;
+                  setCloudSyncEnabled(next);
+                  void saveSettings({ cloudSyncEnabled: next });
+                }}
+                className="h-4 w-4 rounded border-border accent-primary"
+              />
+              Enable Cloud Sync
+            </label>
+            {!canUseCloudSync ? (
+              <button className="inline-flex items-center gap-2 text-xs font-medium text-primary hover:underline" onClick={openUpgrade}>
+                <KeyRound size={12} />
+                Upgrade to protect data in cloud
+              </button>
+            ) : null}
+            <Field label="Device name">
+              <TextInput
+                value={cloudSyncDeviceName}
+                disabled={!canUseCloudSync}
+                placeholder="MacBook Pro"
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setCloudSyncDeviceName(next);
+                  void saveSettings({ cloudSyncDeviceName: next });
+                }}
+              />
+            </Field>
+            <Field label="Auto-protect interval">
+              <SelectInput
+                value={String(cloudSyncInterval)}
+                disabled={!canUseCloudSync || !cloudSyncEnabled}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  setCloudSyncInterval(next);
+                  void saveSettings({ cloudSyncIntervalMinutes: next });
+                }}
+              >
+                <option value="60">Every hour</option>
+                <option value="180">Every 3 hours</option>
+                <option value="360">Every 6 hours</option>
+                <option value="720">Every 12 hours</option>
+                <option value="1440">Every day</option>
+              </SelectInput>
+            </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void handleCloudBackup()} disabled={!canUseCloudSync || !cloudSyncEnabled || Boolean(busyAction)}>
+                {busyAction === 'cloud-backup' ? <LoaderCircle size={14} className="animate-spin" /> : <Cloud size={14} />}
+                Protect now
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => void handleCloudRestore()} disabled={!canUseCloudSync || Boolean(busyAction)}>
+                {busyAction === 'cloud-restore' ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}
+                Restore from cloud
+              </Button>
+            </div>
           </div>
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
@@ -405,7 +662,7 @@ function Options() {
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Privacy</h2>
           <p className="mt-2 text-sm text-muted-foreground">
-            Bookmark content stays in local browser storage unless you export it.
+            Bookmark content stays in local browser storage unless you export it or enable encrypted Cloud Sync.
           </p>
         </div>
         {showDiagnostics ? (

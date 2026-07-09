@@ -1,10 +1,12 @@
 import { EXTENSION_PAGES } from '../shared/constants';
+import { restoreLatestCloudBackup, runCloudBackup } from '../lib/cloudSync/service';
 import { createDedupeKey, softDeleteMissingXBookmarks, upsertBookmark } from '../lib/db/bookmarkRepository';
 import { db } from '../lib/db/database';
 import { parseGraphqlBookmarks } from '../content/x/graphqlParser';
 import { findBottomCursor } from '../content/x/graphqlCursor';
-import { getSettings, setLastSyncStatus } from '../lib/storage/localStorage';
-import type { CapturedBookmarksRequest, ExtensionMessage, ImportDiagnostics, ImportPayload, ImportSession, MessageResponse, Settings } from '../shared/types';
+import { canUseCapability } from '../lib/license/pro';
+import { getLicenseData, getSettings, markLocalDataChanged, setLastSyncStatus } from '../lib/storage/localStorage';
+import type { AutoSyncStatus, CapturedBookmarksRequest, ExtensionMessage, ImportDiagnostics, ImportPayload, ImportSession, MessageResponse, Settings } from '../shared/types';
 
 let capturedBookmarksRequest: CapturedBookmarksRequest | null = null;
 const X_BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
@@ -12,11 +14,12 @@ const CAPTURED_BOOKMARKS_REQUEST_KEY = 'bookmarknest:x-bookmarks-request';
 const LAST_IMPORT_DEBUG_KEY = 'bookmarknest:last-x-import-debug';
 const BOOKMARKS_GRAPHQL_PATTERN = /\/i\/api\/graphql\/([^/]+)\/Bookmarks\b/;
 const SYNC_ALARM_NAME = 'bookmarknest-auto-sync';
+const CLOUD_SYNC_ALARM_NAME = 'bookmarknest-cloud-sync';
 
 async function updateSyncAlarm({ forceReset = false }: { forceReset?: boolean } = {}) {
   if (!chrome.alarms) return;
-  const settings = await getSettings();
-  if (settings.autoSync && settings.syncIntervalMinutes > 0) {
+  const [license, settings] = await Promise.all([getLicenseData(), getSettings()]);
+  if (settings.autoSync && canUseCapability(license, 'auto-sync') && settings.syncIntervalMinutes > 0) {
     // Preserve an existing schedule across service-worker restarts; only (re)create
     // when there is no alarm yet, or when the sync settings actually changed. The
     // 1-minute delay gives users a first sync shortly after enabling instead of
@@ -30,6 +33,33 @@ async function updateSyncAlarm({ forceReset = false }: { forceReset?: boolean } 
     }
   } else {
     await chrome.alarms.clear(SYNC_ALARM_NAME);
+  }
+}
+
+async function getAutoSyncStatus(): Promise<AutoSyncStatus> {
+  await updateSyncAlarm();
+  const [license, settings] = await Promise.all([getLicenseData(), getSettings()]);
+  const alarm = await chrome.alarms?.get?.(SYNC_ALARM_NAME);
+  return {
+    enabled: settings.autoSync && canUseCapability(license, 'auto-sync'),
+    intervalMinutes: settings.syncIntervalMinutes,
+    nextRunAt: alarm?.scheduledTime
+  };
+}
+
+async function updateCloudSyncAlarm({ forceReset = false }: { forceReset?: boolean } = {}) {
+  if (!chrome.alarms) return;
+  const settings = await getSettings();
+  if (settings.cloudSyncEnabled && settings.cloudSyncIntervalMinutes > 0) {
+    const existing = await chrome.alarms.get(CLOUD_SYNC_ALARM_NAME);
+    if (forceReset || !existing) {
+      await chrome.alarms.create(CLOUD_SYNC_ALARM_NAME, {
+        delayInMinutes: 2,
+        periodInMinutes: settings.cloudSyncIntervalMinutes
+      });
+    }
+  } else {
+    await chrome.alarms.clear(CLOUD_SYNC_ALARM_NAME);
   }
 }
 const USER_BY_REST_ID_OPERATION = 'UserByRestId';
@@ -84,9 +114,9 @@ async function sendStartImportToActiveTab(mode: 'visible' | 'auto-scroll' = 'vis
     }
 
     if (!isMissingCapturedRequestError(apiResponse.error)) {
-      if (isRefreshableCapturedRequestError(apiResponse.error)) {
+      if (isRecapturableApiImportError(apiResponse.error)) {
         await clearCapturedBookmarksRequest();
-        const recaptured = await primeCapturedBookmarksRequest();
+        const recaptured = await primeCapturedBookmarksRequest({ active: true });
         if (recaptured) {
           return importBookmarksFromCapturedApi();
         }
@@ -94,7 +124,7 @@ async function sendStartImportToActiveTab(mode: 'visible' | 'auto-scroll' = 'vis
       return apiResponse;
     }
 
-    const primed = await primeCapturedBookmarksRequest();
+    const primed = await primeCapturedBookmarksRequest({ active: true });
     if (primed) {
       const primedApiResponse = await importBookmarksFromCapturedApi();
       if (primedApiResponse.ok || !isMissingCapturedRequestError(primedApiResponse.error)) {
@@ -131,6 +161,21 @@ function isMissingCapturedRequestError(error?: string) {
 
 function isRefreshableCapturedRequestError(error?: string) {
   return Boolean(error && /X Bookmarks API request failed with (401|403|404)/.test(error));
+}
+
+function isRecapturableApiImportError(error?: string) {
+  return (
+    isMissingCapturedRequestError(error) ||
+    isRefreshableCapturedRequestError(error) ||
+    Boolean(
+      error &&
+        (
+          error.includes('returned no bookmark items') ||
+          error.includes('returned an invalid response') ||
+          error.includes('X Bookmarks GraphQL error')
+        )
+    )
+  );
 }
 
 async function captureBookmarksRequest(payload: CapturedBookmarksRequest) {
@@ -304,6 +349,8 @@ function sanitizeImportDiagnostics(raw: Record<string, unknown> | undefined): Im
     avatarMatchedCount: optionalNumber(raw?.avatarMatchedCount),
     missingAvatarCount: optionalNumber(raw?.missingAvatarCount),
     missingAuthorCount: optionalNumber(raw?.missingAuthorCount),
+    visibleBookmarkCount: optionalNumber(raw?.visibleBookmarkCount),
+    totalStoredBookmarkCount: optionalNumber(raw?.totalStoredBookmarkCount),
     missingTweetIdSample: optionalStringArray(raw?.missingTweetIdSample),
     session: session
       ? {
@@ -596,15 +643,15 @@ async function waitForCapturedBookmarksRequest(timeoutMs = 15000) {
   return false;
 }
 
-async function primeCapturedBookmarksRequest() {
+async function primeCapturedBookmarksRequest({ active = true }: { active?: boolean } = {}) {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const bookmarkTabs = await chrome.tabs.query({ url: ['https://x.com/i/bookmarks*', 'https://twitter.com/i/bookmarks*'] });
   const existingTab = bookmarkTabs.find((candidate) => candidate.windowId === activeTab?.windowId) ?? bookmarkTabs[0];
 
   if (existingTab?.id) {
-    await chrome.tabs.update(existingTab.id, { active: true, url: 'https://x.com/i/bookmarks' });
+    await chrome.tabs.update(existingTab.id, { active, url: 'https://x.com/i/bookmarks' });
   } else {
-    await chrome.tabs.create({ url: 'https://x.com/i/bookmarks', active: true });
+    await chrome.tabs.create({ url: 'https://x.com/i/bookmarks', active });
   }
 
   return waitForCapturedBookmarksRequest();
@@ -614,12 +661,21 @@ async function primeCapturedBookmarksRequest() {
 // can show "last sync" and, crucially, surface otherwise-silent failures.
 async function recordSyncStatus(response: MessageResponse<{ session: ImportSession; removedCount?: number }>) {
   const session = response.data?.session;
+  const [visibleBookmarkCount, totalStoredBookmarkCount] = await Promise.all([
+    db.bookmarks.filter((bookmark) => !bookmark.deleted && !bookmark.archived).count(),
+    db.bookmarks.filter((bookmark) => !bookmark.deleted).count()
+  ]);
   await setLastSyncStatus({
     at: Date.now(),
     ok: response.ok,
     inserted: session?.insertedCount,
+    updated: session?.updatedCount,
+    duplicate: session?.duplicateCount,
+    failed: session?.failedCount,
     removed: response.data?.removedCount,
     found: session?.foundCount,
+    visibleBookmarkCount,
+    totalStoredBookmarkCount,
     error: response.ok ? undefined : response.error
   });
 }
@@ -628,6 +684,24 @@ async function importBookmarksFromCapturedApi(): Promise<MessageResponse<{ sessi
   const response = await runCapturedApiImport();
   await recordSyncStatus(response);
   return response;
+}
+
+async function importBookmarksFromCapturedApiWithRecovery({ activePrime = false }: { activePrime?: boolean } = {}): Promise<MessageResponse<{ session: ImportSession; removedCount?: number }>> {
+  const response = await importBookmarksFromCapturedApi();
+  if (response.ok || !isRecapturableApiImportError(response.error)) {
+    return response;
+  }
+
+  await clearCapturedBookmarksRequest();
+  const recaptured = await primeCapturedBookmarksRequest({ active: activePrime });
+  if (!recaptured) {
+    const error = `${response.error ?? 'X API sync failed.'} BookmarkNest could not refresh the X request template automatically. Open x.com/i/bookmarks once, then try Sync now again.`;
+    const failed: MessageResponse<{ session: ImportSession; removedCount?: number }> = { ok: false, error };
+    await recordSyncStatus(failed);
+    return failed;
+  }
+
+  return importBookmarksFromCapturedApi();
 }
 
 async function runCapturedApiImport(): Promise<MessageResponse<{ session: ImportSession; removedCount?: number }>> {
@@ -750,7 +824,12 @@ async function runCapturedApiImport(): Promise<MessageResponse<{ session: Import
     failedCount: 0,
     mirrorComplete: reachedEnd && !fetchError
   });
-  await saveImportDebugSnapshot({ ...diagnostics, session: response.data?.session });
+  await saveImportDebugSnapshot({
+    ...diagnostics,
+    session: response.data?.session,
+    visibleBookmarkCount: await db.bookmarks.filter((bookmark) => !bookmark.deleted && !bookmark.archived).count(),
+    totalStoredBookmarkCount: await db.bookmarks.filter((bookmark) => !bookmark.deleted).count()
+  });
   return response;
 }
 
@@ -848,6 +927,10 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
     }
   }
 
+  if (session.status !== 'failed' && (session.insertedCount > 0 || session.updatedCount > 0 || removedCount > 0)) {
+    await markLocalDataChanged('library-updated');
+  }
+
   return { ok: true, data: { session, removedCount } };
 }
 
@@ -882,7 +965,22 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
     }
 
     if (message.type === 'RUN_X_API_IMPORT') {
-      importBookmarksFromCapturedApi().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      importBookmarksFromCapturedApiWithRecovery().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    if (message.type === 'GET_AUTO_SYNC_STATUS') {
+      getAutoSyncStatus().then((status) => sendResponse({ ok: true, data: status })).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    if (message.type === 'RUN_CLOUD_BACKUP') {
+      runCloudBackup().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    if (message.type === 'RESTORE_CLOUD_BACKUP') {
+      restoreLatestCloudBackup().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 
@@ -907,7 +1005,7 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
   chrome.alarms?.onAlarm?.addListener((alarm) => {
     if (alarm.name === SYNC_ALARM_NAME) {
-      importBookmarksFromCapturedApi().then((result) => {
+      importBookmarksFromCapturedApiWithRecovery().then((result) => {
         if (result.ok && result.data?.session) {
           const { insertedCount } = result.data.session;
           if (insertedCount > 0) {
@@ -916,6 +1014,10 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
           }
         }
       }).catch(() => undefined);
+    }
+
+    if (alarm.name === CLOUD_SYNC_ALARM_NAME) {
+      runCloudBackup().catch(() => undefined);
     }
   });
 
@@ -927,8 +1029,13 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
         previous?.autoSync !== next?.autoSync ||
         previous?.syncIntervalMinutes !== next?.syncIntervalMinutes;
       void updateSyncAlarm({ forceReset: syncChanged });
+      const cloudSyncChanged =
+        previous?.cloudSyncEnabled !== next?.cloudSyncEnabled ||
+        previous?.cloudSyncIntervalMinutes !== next?.cloudSyncIntervalMinutes;
+      void updateCloudSyncAlarm({ forceReset: cloudSyncChanged });
     }
   });
 
   void updateSyncAlarm();
+  void updateCloudSyncAlarm();
 }

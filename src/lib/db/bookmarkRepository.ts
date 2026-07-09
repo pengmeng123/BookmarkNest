@@ -1,5 +1,9 @@
-import type { Bookmark, BookmarkInput, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
-import { db } from './database';
+import type { Collection } from 'dexie';
+
+import type { Bookmark, BookmarkFocusFilter, BookmarkInput, BookmarkSortKey, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
+import { buildBookmarkAuthorSearchText, buildBookmarkSearchText, tokenizeSearchText } from '../bookmarks/searchText';
+import { tokenizeSearchQuery } from '../search/searchBookmarks';
+import { db, type SearchMetadata } from './database';
 
 export interface LocalBackup {
   schemaVersion: 3;
@@ -36,6 +40,90 @@ function createId(prefix: string) {
   }
 
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+let searchMetadataVerified = false;
+
+function metadataUpdatedAt(bookmark: Bookmark) {
+  return Math.max(
+    bookmark.updatedAt,
+    bookmark.noteUpdatedAt ?? 0,
+    bookmark.exportMarkedAt ?? 0,
+    bookmark.createdAt ?? 0
+  );
+}
+
+function createSearchMetadata(bookmark: Bookmark, folder?: Folder, tags: Tag[] = []): SearchMetadata {
+  const searchItem = {
+    ...bookmark,
+    folder,
+    tags
+  };
+  const text = buildBookmarkSearchText(searchItem);
+  const authorText = buildBookmarkAuthorSearchText(searchItem);
+
+  return {
+    bookmarkId: bookmark.id,
+    text,
+    authorText,
+    tokens: tokenizeSearchText(text),
+    updatedAt: metadataUpdatedAt(bookmark)
+  };
+}
+
+async function putSearchMetadataEntries(bookmarks: Bookmark[]) {
+  if (bookmarks.length === 0) {
+    searchMetadataVerified = true;
+    return;
+  }
+
+  const folderIds = Array.from(new Set(bookmarks.map((bookmark) => bookmark.folderId).filter((folderId): folderId is string => Boolean(folderId))));
+  const tagIds = Array.from(new Set(bookmarks.flatMap((bookmark) => bookmark.tagIds)));
+  const [folders, tags] = await Promise.all([
+    folderIds.length ? db.folders.where('id').anyOf(folderIds).toArray() : Promise.resolve([] as Folder[]),
+    tagIds.length ? db.tags.where('id').anyOf(tagIds).toArray() : Promise.resolve([] as Tag[])
+  ]);
+  const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+
+  await db.searchMetadata.bulkPut(
+    bookmarks.map((bookmark) =>
+      createSearchMetadata(
+        bookmark,
+        bookmark.folderId ? folderById.get(bookmark.folderId) : undefined,
+        bookmark.tagIds.map((tagId) => tagById.get(tagId)).filter((tag): tag is Tag => Boolean(tag))
+      )
+    )
+  );
+  searchMetadataVerified = true;
+}
+
+async function refreshSearchMetadataForBookmarks(bookmarkIds: string[]) {
+  if (bookmarkIds.length === 0) {
+    return;
+  }
+
+  const bookmarks = await db.bookmarks.where('id').anyOf(Array.from(new Set(bookmarkIds))).toArray();
+  await putSearchMetadataEntries(bookmarks);
+}
+
+async function rebuildSearchMetadataIndex() {
+  const bookmarks = await db.bookmarks.toArray();
+  await db.searchMetadata.clear();
+  await putSearchMetadataEntries(bookmarks);
+  searchMetadataVerified = true;
+}
+
+async function ensureSearchMetadataIndex() {
+  if (searchMetadataVerified) {
+    return;
+  }
+  const [bookmarkCount, metadataCount] = await Promise.all([db.bookmarks.count(), db.searchMetadata.count()]);
+  if (bookmarkCount !== metadataCount) {
+    await rebuildSearchMetadataIndex();
+    return;
+  }
+  searchMetadataVerified = true;
 }
 
 export function createDedupeKey(input: Pick<BookmarkInput, 'tweetId' | 'tweetUrl' | 'authorHandle' | 'contentText'>) {
@@ -95,6 +183,7 @@ export async function upsertBookmark(input: BookmarkInput) {
     };
 
     await db.bookmarks.put(updated);
+    await putSearchMetadataEntries([updated]);
     if (wasDeleted) {
       await recalculateTagUsage(updated.tagIds);
     }
@@ -124,6 +213,7 @@ export async function upsertBookmark(input: BookmarkInput) {
   };
 
   await db.bookmarks.add(bookmark);
+  await putSearchMetadataEntries([bookmark]);
   return { bookmark, inserted: true, restored: false };
 }
 
@@ -135,6 +225,7 @@ export async function updateBookmarkNote(bookmarkId: string, note: string) {
     noteUpdatedAt: nextNote ? Date.now() : undefined,
     updatedAt: Date.now()
   });
+  await refreshSearchMetadataForBookmarks([bookmarkId]);
 }
 
 export async function setBookmarkMarkedForExport(bookmarkId: string, markedForExport: boolean) {
@@ -214,6 +305,7 @@ export async function resetDomainData() {
       db.savedViews.clear()
     ]);
   });
+  searchMetadataVerified = true;
 }
 
 export async function exportLocalBackup(): Promise<LocalBackup> {
@@ -292,6 +384,7 @@ export async function importLocalBackup(value: unknown) {
     ]);
   });
 
+  await rebuildSearchMetadataIndex();
   await recalculateTagUsage(value.tags.map((tag) => tag.id));
 }
 
@@ -312,6 +405,8 @@ export async function createFolder(name: string) {
 
 export async function renameFolder(folderId: string, name: string) {
   await db.folders.update(folderId, { name, updatedAt: Date.now() });
+  const bookmarkIds = (await db.bookmarks.where('folderId').equals(folderId).toArray()).map((bookmark) => bookmark.id);
+  await refreshSearchMetadataForBookmarks(bookmarkIds);
 }
 
 export async function deleteFolder(folderId: string): Promise<FolderRestoreSnapshot | null> {
@@ -337,6 +432,8 @@ export async function deleteFolder(folderId: string): Promise<FolderRestoreSnaps
     await db.folders.delete(folderId);
   });
 
+  await refreshSearchMetadataForBookmarks(assignments.map((assignment) => assignment.bookmarkId));
+
   return { folder, assignments };
 }
 
@@ -352,6 +449,7 @@ export async function restoreFolder(snapshot: FolderRestoreSnapshot) {
       )
     );
   });
+  await refreshSearchMetadataForBookmarks(snapshot.assignments.map((assignment) => assignment.bookmarkId));
 }
 
 export async function moveBookmarksToFolder(bookmarkIds: string[], folderId?: string) {
@@ -363,6 +461,7 @@ export async function moveBookmarksToFolder(bookmarkIds: string[], folderId?: st
     }
     bookmark.updatedAt = Date.now();
   });
+  await refreshSearchMetadataForBookmarks(bookmarkIds);
 }
 
 export async function restoreBookmarkFolders(assignments: { bookmarkId: string; folderId?: string }[]) {
@@ -376,6 +475,7 @@ export async function restoreBookmarkFolders(assignments: { bookmarkId: string; 
       )
     );
   });
+  await refreshSearchMetadataForBookmarks(assignments.map((assignment) => assignment.bookmarkId));
 }
 
 export async function createTag(name: string, color = '#14786f') {
@@ -408,6 +508,7 @@ export async function addTagToBookmarks(bookmarkIds: string[], tagId: string) {
       await recalculateTagUsage([tagId]);
     }
   });
+  await refreshSearchMetadataForBookmarks(bookmarkIds);
 }
 
 export async function removeTagFromBookmark(bookmarkId: string, tagId: string) {
@@ -418,6 +519,7 @@ export async function removeTagFromBookmark(bookmarkId: string, tagId: string) {
     });
     await recalculateTagUsage([tagId]);
   });
+  await refreshSearchMetadataForBookmarks([bookmarkId]);
 }
 
 export async function deleteTag(tagId: string): Promise<TagRestoreSnapshot | null> {
@@ -440,6 +542,8 @@ export async function deleteTag(tagId: string): Promise<TagRestoreSnapshot | nul
     await db.tags.delete(tagId);
   });
 
+  await refreshSearchMetadataForBookmarks(bookmarkIds);
+
   return { tag, bookmarkIds };
 }
 
@@ -454,6 +558,7 @@ export async function restoreTag(snapshot: TagRestoreSnapshot) {
     });
     await recalculateTagUsage([snapshot.tag.id]);
   });
+  await refreshSearchMetadataForBookmarks(snapshot.bookmarkIds);
 }
 
 export interface BookmarkListFilters {
@@ -465,6 +570,28 @@ export interface BookmarkListFilters {
 export interface BookmarkListItem extends Bookmark {
   folder?: Folder;
   tags: Tag[];
+  searchText?: string;
+  authorSearchText?: string;
+}
+
+export interface BookmarkQueryRequest {
+  filters?: BookmarkListFilters;
+  query?: string;
+  sortKey?: BookmarkSortKey;
+  focus?: BookmarkFocusFilter;
+  authorQuery?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface BookmarkQueryResult {
+  items: BookmarkListItem[];
+  totalCount: number;
+  hasMore: boolean;
+  viewSummary: {
+    withNotes: number;
+    queued: number;
+  };
 }
 
 function compareBookmarksBySourceOrder(left: Bookmark, right: Bookmark) {
@@ -481,30 +608,307 @@ function compareBookmarksBySourceOrder(left: Bookmark, right: Bookmark) {
   return right.id.localeCompare(left.id);
 }
 
-export async function listBookmarkItems(filters: BookmarkListFilters = {}): Promise<BookmarkListItem[]> {
-  const [bookmarks, folders, tags] = await Promise.all([db.bookmarks.toArray(), db.folders.toArray(), db.tags.toArray()]);
+type BookmarkArchiveScope = 'active' | 'archived' | 'all';
+
+function matchesArchiveScope(bookmark: Bookmark, scope: BookmarkArchiveScope) {
+  if (scope === 'all') {
+    return true;
+  }
+
+  return scope === 'archived' ? bookmark.archived : !bookmark.archived;
+}
+
+function matchesFolderFilter(bookmark: Bookmark, folderId: BookmarkListFilters['folderId']) {
+  if (folderId === null) {
+    return !bookmark.folderId;
+  }
+
+  if (folderId) {
+    return bookmark.folderId === folderId;
+  }
+
+  return true;
+}
+
+function matchesTagFilter(bookmark: Bookmark, tagId: BookmarkListFilters['tagId']) {
+  if (!tagId) {
+    return true;
+  }
+
+  return bookmark.tagIds.includes(tagId);
+}
+
+function mapBookmarkListItem(bookmark: Bookmark, folderById: Map<string, Folder>, tagById: Map<string, Tag>) {
+  const resolvedTags = bookmark.tagIds.map((tagId) => tagById.get(tagId)).filter((tag): tag is Tag => Boolean(tag));
+  const folder = bookmark.folderId ? folderById.get(bookmark.folderId) : undefined;
+  const item: BookmarkListItem = {
+    ...bookmark,
+    folder,
+    tags: resolvedTags
+  };
+
+  item.searchText = buildBookmarkSearchText(item);
+  item.authorSearchText = buildBookmarkAuthorSearchText(item);
+  return item;
+}
+
+function mapBookmarkListItems(bookmarks: Bookmark[], folders: Folder[], tags: Tag[]) {
   const folderById = new Map(folders.map((folder) => [folder.id, folder]));
   const tagById = new Map(tags.map((tag) => [tag.id, tag]));
 
-  return bookmarks
-    .filter((bookmark) => !bookmark.deleted)
-    .filter((bookmark) => (filters.includeArchived ? bookmark.archived : !bookmark.archived))
-    .filter((bookmark) => {
-      if (filters.folderId === null) {
-        return !bookmark.folderId;
-      }
-      if (filters.folderId) {
-        return bookmark.folderId === filters.folderId;
-      }
-      return true;
-    })
-    .filter((bookmark) => (filters.tagId ? bookmark.tagIds.includes(filters.tagId) : true))
-    .sort(compareBookmarksBySourceOrder)
-    .map((bookmark) => ({
-      ...bookmark,
-      folder: bookmark.folderId ? folderById.get(bookmark.folderId) : undefined,
-      tags: bookmark.tagIds.map((tagId) => tagById.get(tagId)).filter((tag): tag is Tag => Boolean(tag))
-    }));
+  return bookmarks.map((bookmark) => mapBookmarkListItem(bookmark, folderById, tagById));
+}
+
+async function listBookmarksRaw(filters: BookmarkListFilters = {}, archiveScope: BookmarkArchiveScope = 'active'): Promise<Bookmark[]> {
+  const filterByTag = typeof filters.tagId === 'string' && filters.tagId.length > 0;
+  const filterByFolder = typeof filters.folderId === 'string' && filters.folderId.length > 0;
+
+  if (filterByFolder) {
+    return db.bookmarks
+      .where('folderId')
+      .equals(filters.folderId as string)
+      .and((bookmark) => !bookmark.deleted && matchesArchiveScope(bookmark, archiveScope) && (!filterByTag || bookmark.tagIds.includes(filters.tagId as string)))
+      .toArray();
+  }
+
+  return db.bookmarks
+    .toCollection()
+    .and(
+      (bookmark) =>
+        !bookmark.deleted &&
+        matchesArchiveScope(bookmark, archiveScope) &&
+        matchesFolderFilter(bookmark, filters.folderId) &&
+        (!filterByTag || bookmark.tagIds.includes(filters.tagId as string))
+    )
+    .toArray();
+}
+
+export async function listBookmarkItems(filters: BookmarkListFilters = {}): Promise<BookmarkListItem[]> {
+  const archiveScope = filters.includeArchived ? 'archived' : 'active';
+  const [bookmarks, folders, tags] = await Promise.all([listBookmarksRaw(filters, archiveScope), db.folders.toArray(), db.tags.toArray()]);
+
+  return mapBookmarkListItems(bookmarks.sort(compareBookmarksBySourceOrder), folders, tags);
+}
+
+export async function getBookmarkItemsByIds(bookmarkIds: string[]): Promise<BookmarkListItem[]> {
+  if (bookmarkIds.length === 0) {
+    return [];
+  }
+
+  const [bookmarks, folders, tags] = await Promise.all([db.bookmarks.where('id').anyOf(bookmarkIds).toArray(), db.folders.toArray(), db.tags.toArray()]);
+  return mapBookmarkListItems(bookmarks, folders, tags);
+}
+
+function matchesFocusFilter(bookmark: BookmarkListItem, focus: SavedView['focus'] | undefined) {
+  if (focus === 'with-notes') {
+    return Boolean(bookmark.note?.trim());
+  }
+  if (focus === 'without-notes') {
+    return !bookmark.note?.trim();
+  }
+  if (focus === 'with-media') {
+    return bookmark.mediaUrls.length > 0;
+  }
+  if (focus === 'unfiled') {
+    return !bookmark.folderId;
+  }
+  if (focus === 'export-queue') {
+    return Boolean(bookmark.markedForExport);
+  }
+
+  return true;
+}
+
+function normalizeAuthorFilter(value: string | undefined) {
+  return value?.normalize('NFC').toLowerCase().replace(/^@/, '').trim() ?? '';
+}
+
+function matchesSearchTerms(bookmark: BookmarkListItem, terms: string[]) {
+  const searchText = bookmark.searchText ?? buildBookmarkSearchText(bookmark);
+  return terms.every((term) => searchText.includes(term));
+}
+
+async function getCandidateBookmarkIdsForTerms(terms: string[]) {
+  if (terms.length === 0) {
+    return null;
+  }
+
+  if (terms.some((term) => term.length < 2)) {
+    return null;
+  }
+
+  await ensureSearchMetadataIndex();
+
+  const sortedTerms = [...terms].sort((left, right) => left.localeCompare(right));
+  let candidateIds: Set<string> | null = null;
+
+  for (const term of sortedTerms) {
+    const matches = await db.searchMetadata.where('tokens').equals(term).toArray();
+    const nextIds = new Set<string>(matches.map((match) => match.bookmarkId));
+    if (candidateIds == null) {
+      candidateIds = nextIds;
+    } else {
+      const currentIds: string[] = Array.from(candidateIds as Set<string>);
+      candidateIds = new Set<string>(currentIds.filter((bookmarkId: string) => nextIds.has(bookmarkId)));
+    }
+
+    if (candidateIds.size === 0) {
+      return candidateIds;
+    }
+  }
+
+  return candidateIds;
+}
+
+function matchesBookmarkQuery(bookmark: BookmarkListItem, query: Pick<BookmarkQueryRequest, 'focus' | 'authorQuery' | 'query'>, terms: string[]) {
+  if (!matchesFocusFilter(bookmark, query.focus)) {
+    return false;
+  }
+
+  const authorQuery = normalizeAuthorFilter(query.authorQuery);
+  if (authorQuery && !(bookmark.authorSearchText ?? `${bookmark.authorName} ${bookmark.authorHandle}`.normalize('NFC').toLowerCase()).includes(authorQuery)) {
+    return false;
+  }
+
+  if (terms.length > 0 && !matchesSearchTerms(bookmark, terms)) {
+    return false;
+  }
+
+  return true;
+}
+
+async function iterateSortedBookmarks(
+  sortKey: BookmarkSortKey,
+  callback: (bookmark: Bookmark) => void
+) {
+  const run = async (bookmarks: Collection<Bookmark, string>) => {
+    await bookmarks.each((bookmark) => {
+      callback(bookmark);
+    });
+  };
+
+  switch (sortKey) {
+    case 'date-imported':
+      await run(db.bookmarks.orderBy('importedAt').reverse());
+      break;
+    case 'date-posted':
+      await run(db.bookmarks.orderBy('createdAt').reverse().filter((bookmark) => bookmark.createdAt != null));
+      await run(db.bookmarks.orderBy('importedAt').reverse().filter((bookmark) => bookmark.createdAt == null));
+      break;
+    case 'author':
+      await run(db.bookmarks.orderBy('authorName'));
+      break;
+    default:
+      await run(db.bookmarks.orderBy('sourceOrder').filter((bookmark) => bookmark.sourceOrder != null));
+      await run(db.bookmarks.orderBy('importedAt').reverse().filter((bookmark) => bookmark.sourceOrder == null));
+      break;
+  }
+}
+
+async function queryBookmarksInternal(
+  request: BookmarkQueryRequest,
+  options?: { collectItems?: boolean; limitOverride?: number; idsOnly?: boolean }
+): Promise<BookmarkQueryResult & { ids?: string[] }> {
+  const filters = request.filters ?? {};
+  const sortKey = request.sortKey ?? 'source';
+  const offset = request.offset ?? 0;
+  const limit = options?.limitOverride ?? request.limit ?? 200;
+  const archiveScope: BookmarkArchiveScope = filters.includeArchived ? 'archived' : 'active';
+  const terms = tokenizeSearchQuery(request.query ?? '');
+  const candidateIds = await getCandidateBookmarkIdsForTerms(terms);
+  const [folders, tags] = await Promise.all([db.folders.toArray(), db.tags.toArray()]);
+  const folderById = new Map(folders.map((folder) => [folder.id, folder]));
+  const tagById = new Map(tags.map((tag) => [tag.id, tag]));
+  const items: BookmarkListItem[] = [];
+  const ids: string[] = [];
+  let totalCount = 0;
+  let withNotes = 0;
+  let queued = 0;
+
+  await iterateSortedBookmarks(sortKey, (bookmark) => {
+    if (
+      bookmark.deleted ||
+      (candidateIds != null && !candidateIds.has(bookmark.id)) ||
+      !matchesArchiveScope(bookmark, archiveScope) ||
+      !matchesFolderFilter(bookmark, filters.folderId) ||
+      !matchesTagFilter(bookmark, filters.tagId)
+    ) {
+      return;
+    }
+
+    const item = mapBookmarkListItem(bookmark, folderById, tagById);
+    if (!matchesBookmarkQuery(item, request, terms)) {
+      return;
+    }
+
+    if (item.note?.trim()) {
+      withNotes += 1;
+    }
+    if (item.markedForExport) {
+      queued += 1;
+    }
+    if (options?.idsOnly) {
+      ids.push(item.id);
+    } else if ((options?.collectItems ?? true) && totalCount >= offset && items.length < limit) {
+      items.push(item);
+    }
+
+    totalCount += 1;
+  });
+
+  return {
+    items,
+    ids: options?.idsOnly ? ids : undefined,
+    totalCount,
+    hasMore: offset + items.length < totalCount,
+    viewSummary: { withNotes, queued }
+  };
+}
+
+export async function queryBookmarkItems(request: BookmarkQueryRequest): Promise<BookmarkQueryResult> {
+  const result = await queryBookmarksInternal(request);
+  return {
+    items: result.items,
+    totalCount: result.totalCount,
+    hasMore: result.hasMore,
+    viewSummary: result.viewSummary
+  };
+}
+
+export async function listBookmarkIdsForQuery(request: BookmarkQueryRequest): Promise<string[]> {
+  const result = await queryBookmarksInternal(request, { collectItems: false, idsOnly: true });
+  return result.ids ?? [];
+}
+
+export async function listAllBookmarkItemsForQuery(request: BookmarkQueryRequest): Promise<BookmarkListItem[]> {
+  const result = await queryBookmarksInternal(request, { limitOverride: Number.MAX_SAFE_INTEGER });
+  return result.items;
+}
+
+export async function getSavedViewCounts(savedViews: SavedView[]): Promise<Record<string, number>> {
+  if (savedViews.length === 0) {
+    return {};
+  }
+
+  const counts: Record<string, number> = {};
+
+  for (const savedView of savedViews) {
+    const result = await queryBookmarkItems({
+      filters: {
+        folderId: savedView.folderId ?? undefined,
+        tagId: savedView.tagId ?? undefined,
+        includeArchived: savedView.includeArchived
+      },
+      query: savedView.query,
+      sortKey: savedView.sortKey,
+      focus: savedView.focus,
+      authorQuery: savedView.authorQuery,
+      limit: 0
+    });
+    counts[savedView.id] = result.totalCount;
+  }
+
+  return counts;
 }
 
 export interface BookmarkCounts {
@@ -551,8 +955,6 @@ export async function listFolders() {
 }
 
 export async function listTags() {
-  const tags = await db.tags.orderBy('name').toArray();
-  await recalculateTagUsage(tags.map((tag) => tag.id));
   return db.tags.orderBy('name').toArray();
 }
 

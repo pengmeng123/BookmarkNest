@@ -38,10 +38,19 @@ function describeLastSync(sync: LastSyncStatus) {
     return `Last sync failed (${formatSyncTime(sync.at)}): ${formatImportError(sync.error)}`;
   }
 
-  const parts = [`${sync.inserted ?? 0} new`];
+  const libraryCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
+  const parts = libraryCount != null ? [`${libraryCount} in library`] : [];
+  parts.push(`${sync.inserted ?? 0} new`);
+  if (sync.duplicate != null) {
+    parts.push(`${sync.duplicate} duplicate`);
+  }
+  if (sync.failed) {
+    parts.push(`${sync.failed} failed`);
+  }
   if (sync.removed) {
     parts.push(`${sync.removed} removed`);
   }
+  parts.push(`${sync.found ?? 0} fetched`);
   return `Last sync ${formatSyncTime(sync.at)}: ${parts.join(', ')}`;
 }
 
@@ -64,7 +73,8 @@ function Popup() {
         onLocalDataChange: () => {
           void getBookmarkCounts().then((c) => setTotalCount(c.total));
           void getLastSyncStatus().then(setLastSync);
-        }
+        },
+        onLastSyncChange: setLastSync
       }),
     []
   );
@@ -90,7 +100,7 @@ function Popup() {
       const session = response.data?.session;
       setStatus(
         session
-          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} found.`
+          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
           : 'Import started.'
       );
       void getBookmarkCounts().then((c) => setTotalCount(c.total));

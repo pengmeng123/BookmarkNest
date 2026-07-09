@@ -9,12 +9,15 @@ import {
   deleteFolder,
   deleteSavedView,
   deleteTag,
+  queryBookmarkItems,
   exportLocalBackup,
+  getSavedViewCounts,
   importLocalBackup,
   listImportSessions,
   listBookmarkItems,
   listSavedViews,
   moveBookmarksToFolder,
+  renameFolder,
   removeTagFromBookmark,
   resetDomainData,
   restoreFolder,
@@ -289,6 +292,103 @@ describe('bookmarkRepository', () => {
     await expect(listBookmarkItems({ folderId: folder.id })).resolves.toMatchObject([{ id: first.bookmark.id }]);
     await expect(listBookmarkItems({ folderId: null })).resolves.toMatchObject([{ id: second.bookmark.id }]);
     await expect(listBookmarkItems({ tagId: tag.id })).resolves.toMatchObject([{ id: second.bookmark.id }]);
+  });
+
+  it('counts saved views without loading the full library into app state', async () => {
+    const withNote = await upsertBookmark({ ...bookmarkInput(1), contentText: 'AI research', sourceOrder: 0 });
+    const withoutNote = await upsertBookmark({ ...bookmarkInput(2), contentText: 'AI startup', sourceOrder: 1 });
+    const archived = await upsertBookmark({ ...bookmarkInput(3), contentText: 'Archived AI', sourceOrder: 2 });
+    const folder = await createFolder('Research');
+    const tag = await createTag('ai');
+
+    await moveBookmarksToFolder([withNote.bookmark.id], folder.id);
+    await addTagToBookmarks([withNote.bookmark.id, withoutNote.bookmark.id], tag.id);
+    await updateBookmarkNote(withNote.bookmark.id, 'Important thread');
+    await setBookmarkArchived(archived.bookmark.id, true);
+
+    const views = [
+      await createSavedView({
+        name: 'AI tagged',
+        query: 'ai',
+        sortKey: 'source',
+        focus: 'all',
+        authorQuery: '',
+        folderId: null,
+        tagId: tag.id,
+        includeArchived: false
+      }),
+      await createSavedView({
+        name: 'Needs notes',
+        query: '',
+        sortKey: 'source',
+        focus: 'without-notes',
+        authorQuery: '',
+        folderId: null,
+        tagId: null,
+        includeArchived: false
+      }),
+      await createSavedView({
+        name: 'Archived',
+        query: 'archived',
+        sortKey: 'source',
+        focus: 'all',
+        authorQuery: '',
+        folderId: null,
+        tagId: null,
+        includeArchived: true
+      })
+    ];
+
+    await expect(getSavedViewCounts(views)).resolves.toEqual({
+      [views[0].id]: 2,
+      [views[1].id]: 1,
+      [views[2].id]: 1
+    });
+  });
+
+  it('queries bookmark pages without materializing the whole result set', async () => {
+    await upsertBookmark({ ...bookmarkInput(1), contentText: 'Alpha note', sourceOrder: 0 });
+    await upsertBookmark({ ...bookmarkInput(2), contentText: 'Beta note', sourceOrder: 1 });
+    await upsertBookmark({ ...bookmarkInput(3), contentText: 'Gamma note', sourceOrder: 2 });
+    await updateBookmarkNote((await listBookmarkItems())[0].id, 'keep');
+
+    const firstPage = await queryBookmarkItems({
+      sortKey: 'source',
+      query: 'note',
+      offset: 0,
+      limit: 2
+    });
+
+    expect(firstPage.totalCount).toBe(3);
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.viewSummary.withNotes).toBe(1);
+
+    const secondPage = await queryBookmarkItems({
+      sortKey: 'source',
+      query: 'note',
+      offset: 2,
+      limit: 2
+    });
+
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.hasMore).toBe(false);
+  });
+
+  it('keeps the persisted search index in sync with note and folder changes', async () => {
+    const inserted = await upsertBookmark({ ...bookmarkInput(1), contentText: 'Base bookmark', sourceOrder: 0 });
+    const folder = await createFolder('Ideas');
+
+    await moveBookmarksToFolder([inserted.bookmark.id], folder.id);
+    await updateBookmarkNote(inserted.bookmark.id, 'Ship this later');
+
+    await expect(queryBookmarkItems({ query: 'ideas' })).resolves.toMatchObject({ totalCount: 1 });
+    await expect(queryBookmarkItems({ query: 'ship later' })).resolves.toMatchObject({ totalCount: 1 });
+
+    await renameFolder(folder.id, 'Archive');
+
+    await expect(queryBookmarkItems({ query: 'ideas' })).resolves.toMatchObject({ totalCount: 0 });
+    await expect(queryBookmarkItems({ query: 'archive' })).resolves.toMatchObject({ totalCount: 1 });
   });
 
   it('exports and imports a full local backup with notes and saved views', async () => {

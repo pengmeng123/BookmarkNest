@@ -89,6 +89,7 @@ export interface ImportPayload {
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 export type ExportFormat = 'json' | 'markdown' | 'csv';
+export type CloudSyncPhase = 'idle' | 'syncing' | 'protected' | 'attention';
 
 export interface Settings {
   theme: ThemePreference;
@@ -96,6 +97,9 @@ export interface Settings {
   language: 'en';
   autoSync: boolean;
   syncIntervalMinutes: number;
+  cloudSyncEnabled: boolean;
+  cloudSyncIntervalMinutes: number;
+  cloudSyncDeviceName?: string;
   // When true, a complete import soft-deletes local X bookmarks that are no
   // longer present on x.com (i.e. were un-bookmarked there). Default off.
   mirrorRemovals: boolean;
@@ -110,9 +114,20 @@ export interface LastSyncStatus {
   at: number;
   ok: boolean;
   inserted?: number;
+  updated?: number;
+  duplicate?: number;
+  failed?: number;
   removed?: number;
   found?: number;
+  visibleBookmarkCount?: number;
+  totalStoredBookmarkCount?: number;
   error?: string;
+}
+
+export interface AutoSyncStatus {
+  enabled: boolean;
+  intervalMinutes: number;
+  nextRunAt?: number;
 }
 
 export interface LastBackupStatus {
@@ -120,6 +135,28 @@ export interface LastBackupStatus {
   bookmarkCount: number;
   savedViewCount: number;
   filename: string;
+}
+
+export interface CloudSyncStatus {
+  phase: CloudSyncPhase;
+  enabled: boolean;
+  lastRunAt?: number;
+  lastSuccessAt?: number;
+  lastError?: string;
+  remoteSnapshotId?: string;
+  lastSnapshotHash?: string;
+  lastUploadResult?: 'uploaded' | 'unchanged' | 'rate-limited';
+  bookmarkCount?: number;
+  savedViewCount?: number;
+  nextRunAt?: number;
+}
+
+export interface CloudSyncSnapshotSummary {
+  id: string;
+  createdAt: number;
+  bookmarkCount: number;
+  savedViewCount: number;
+  deviceName?: string;
 }
 
 export interface LicenseData {
@@ -139,6 +176,9 @@ export type ExtensionMessage =
   | { type: 'OPEN_UPGRADE' }
   | { type: 'START_X_IMPORT'; mode?: 'visible' | 'auto-scroll' }
   | { type: 'RUN_X_API_IMPORT' }
+  | { type: 'GET_AUTO_SYNC_STATUS' }
+  | { type: 'RUN_CLOUD_BACKUP' }
+  | { type: 'RESTORE_CLOUD_BACKUP' }
   | { type: 'GET_IMPORT_DIAGNOSTICS' }
   | { type: 'CAPTURE_X_BOOKMARKS_REQUEST'; payload: CapturedBookmarksRequest }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }
@@ -188,6 +228,8 @@ export interface ImportDiagnostics {
   avatarMatchedCount?: number;
   missingAvatarCount?: number;
   missingAuthorCount?: number;
+  visibleBookmarkCount?: number;
+  totalStoredBookmarkCount?: number;
   missingTweetIdSample?: string[];
   session?: Pick<ImportSession, 'foundCount' | 'insertedCount' | 'updatedCount' | 'duplicateCount' | 'failedCount' | 'status'>;
   error?: string;

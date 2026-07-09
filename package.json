@@ -7,6 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "license:deactivate": "node scripts/deactivate-license-instance.mjs",
     "test": "vitest run --passWithNoTests",
     "test:watch": "vitest",
     "lint": "eslint ."
@@ -19,6 +20,7 @@
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-virtuoso": "^4.18.10",
     "tailwind-merge": "^2.5.5",
     "zustand": "^5.0.2"
   },

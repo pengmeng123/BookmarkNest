@@ -3,9 +3,10 @@ import Dexie, { type Table } from 'dexie';
 import type { Bookmark, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
 
 export interface SearchMetadata {
-  id: string;
   bookmarkId: string;
   text: string;
+  authorText: string;
+  tokens: string[];
   updatedAt: number;
 }
 
@@ -47,6 +48,27 @@ export class BookmarkNestDatabase extends Dexie {
       searchMetadata: '&id, bookmarkId, updatedAt',
       savedViews: '&id, updatedAt, createdAt, folderId, tagId'
     });
+
+    this.version(4).stores({
+      bookmarks:
+        '&id, &dedupeKey, tweetId, tweetUrl, authorHandle, authorName, createdAt, importedAt, sourceOrder, updatedAt, noteUpdatedAt, folderId, archived, deleted, [deleted+archived+sourceOrder]',
+      folders: '&id, name, sortOrder, createdAt, updatedAt',
+      tags: '&id, &name, color, usageCount, createdAt, updatedAt',
+      importSessions: '&id, startedAt, finishedAt, status',
+      searchMetadata: '&id, bookmarkId, updatedAt',
+      savedViews: '&id, updatedAt, createdAt, folderId, tagId'
+    });
+
+    this.version(5).stores({
+      bookmarks:
+        '&id, &dedupeKey, tweetId, tweetUrl, authorHandle, authorName, createdAt, importedAt, sourceOrder, updatedAt, noteUpdatedAt, folderId, archived, deleted, [deleted+archived+sourceOrder]',
+      folders: '&id, name, sortOrder, createdAt, updatedAt',
+      tags: '&id, &name, color, usageCount, createdAt, updatedAt',
+      importSessions: '&id, startedAt, finishedAt, status',
+      searchMetadata: '&bookmarkId, *tokens, updatedAt',
+      savedViews: '&id, updatedAt, createdAt, folderId, tagId'
+    });
+
   }
 }
 

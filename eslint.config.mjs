@@ -24,11 +24,24 @@ const testGlobals = {
   vi: 'readonly'
 };
 
+const nodeScriptGlobals = {
+  console: 'readonly',
+  process: 'readonly'
+};
+
 export default [
   {
     ignores: ['dist/**', 'node_modules/**']
   },
   js.configs.recommended,
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: nodeScriptGlobals
+    }
+  },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
