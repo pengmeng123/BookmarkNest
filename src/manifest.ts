@@ -6,6 +6,12 @@ export const manifest: ManifestV3Export = {
   short_name: 'BookmarkNest',
   description: 'Search, organize, export, and back up X/Twitter bookmarks with tags, folders, notes, saved views, and encrypted Cloud Sync.',
   version: '1.0.0',
+  icons: {
+    16: 'src/assets/icons/icon16.png',
+    32: 'src/assets/icons/icon32.png',
+    48: 'src/assets/icons/icon48.png',
+    128: 'src/assets/icons/icon128.png'
+  },
   action: {
     default_title: 'BookmarkNest',
     default_popup: 'src/popup/index.html'
