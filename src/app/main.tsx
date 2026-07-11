@@ -62,6 +62,7 @@ import {
   restoreBookmarks,
   restoreFolder,
   restoreTag,
+  permanentlyDeleteBookmarks,
   setBookmarkArchived,
   setBookmarkMarkedForExport,
   softDeleteBookmark,
@@ -99,6 +100,7 @@ type ConfirmDialogState =
   | { kind: 'delete-folder'; title: string; description: string; folderId: string; actionLabel: string }
   | { kind: 'delete-tag'; title: string; description: string; tagId: string; actionLabel: string }
   | { kind: 'delete-bookmark'; title: string; description: string; bookmarkId: string; actionLabel: string }
+  | { kind: 'permanently-delete-bookmark'; title: string; description: string; bookmarkId: string; actionLabel: string }
   | { kind: 'bulk-delete'; title: string; description: string; actionLabel: string }
   | { kind: 'delete-view'; title: string; description: string; viewId: string; actionLabel: string }
   | null;
@@ -121,6 +123,8 @@ const focusOptions: { value: BookmarkFocusFilter; label: string }[] = [
   { value: 'with-notes', label: 'Has notes' },
   { value: 'without-notes', label: 'Needs notes' },
   { value: 'with-media', label: 'Has media' },
+  { value: 'with-links', label: 'External links' },
+  { value: 'threads', label: 'Threads' },
   { value: 'unfiled', label: 'Unfiled' },
   { value: 'export-queue', label: 'Export picks' }
 ];
@@ -288,10 +292,15 @@ function AppSidebar({
   activeFolderId,
   activeTagId,
   includeArchived,
+  showTrash,
+  researchSources,
   onFocusChange,
   onFolderChange,
   onTagChange,
   onArchivedChange,
+  onTrashChange,
+  onAuthorSource,
+  onDomainSource,
   onCreateFolder,
   onCreateTag,
   onRenameFolder,
@@ -300,15 +309,20 @@ function AppSidebar({
 }: {
   folders: { id: string; name: string }[];
   tags: { id: string; name: string; usageCount: number; color: string }[];
-  counts: { total: number; uncategorized: number; archived: number; withNotes: number; exportQueue: number; byFolder: Record<string, number> };
+  counts: { total: number; deleted: number; uncategorized: number; archived: number; withNotes: number; exportQueue: number; byFolder: Record<string, number> };
   focusFilter: BookmarkFocusFilter;
   activeFolderId: FolderFilter;
   activeTagId?: string | null;
   includeArchived: boolean;
+  showTrash: boolean;
+  researchSources: { authors: { value: string; count: number }[]; domains: { value: string; count: number }[] };
   onFocusChange: (focus: BookmarkFocusFilter) => void;
   onFolderChange: (folderId: FolderFilter) => void;
   onTagChange: (tagId?: string | null) => void;
   onArchivedChange: (includeArchived: boolean) => void;
+  onTrashChange: (showTrash: boolean) => void;
+  onAuthorSource: (author: string) => void;
+  onDomainSource: (domain: string) => void;
   onCreateFolder: () => void;
   onCreateTag: () => void;
   onRenameFolder: (folderId: string) => void;
@@ -377,7 +391,7 @@ function AppSidebar({
       </div>
 
       <div className="px-2 py-3">
-        <button className={navItemClass(activeFolderId === undefined && !includeArchived)} onClick={() => onFolderChange(undefined)}>
+        <button className={navItemClass(activeFolderId === undefined && !includeArchived && !showTrash)} onClick={() => onFolderChange(undefined)}>
           <Inbox size={16} />
           <span className="truncate">All bookmarks</span>
           <span className="ml-auto text-xs">{counts.total}</span>
@@ -391,6 +405,11 @@ function AppSidebar({
           <Archive size={16} />
           <span className="truncate">Archived</span>
           <span className="ml-auto text-xs">{counts.archived}</span>
+        </button>
+        <button className={navItemClass(showTrash)} onClick={() => onTrashChange(!showTrash)}>
+          <Trash2 size={16} />
+          <span className="truncate">Trash</span>
+          <span className="ml-auto text-xs">{counts.deleted}</span>
         </button>
       </div>
 
@@ -450,6 +469,27 @@ function AppSidebar({
           ))}
         </div>
       </div>
+
+      {(researchSources.authors.length || researchSources.domains.length) ? (
+        <div className="border-t border-border/70 px-4 py-3">
+          {researchSources.authors.length ? (
+            <div>
+              <h2 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Top authors</h2>
+              <div className="mt-2 space-y-1">
+                {researchSources.authors.map((source) => <button key={source.value} className={navItemClass(false)} onClick={() => onAuthorSource(source.value)}><UserRound size={14} /><span className="truncate">@{source.value}</span><span className="ml-auto text-xs">{source.count}</span></button>)}
+              </div>
+            </div>
+          ) : null}
+          {researchSources.domains.length ? (
+            <div className={researchSources.authors.length ? 'mt-4' : ''}>
+              <h2 className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">Link sources</h2>
+              <div className="mt-2 space-y-1">
+                {researchSources.domains.map((source) => <button key={source.value} className={navItemClass(false)} onClick={() => onDomainSource(source.value)}><ExternalLink size={14} /><span className="truncate">{source.value}</span><span className="ml-auto text-xs">{source.count}</span></button>)}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </aside>
   );
 }
@@ -885,6 +925,8 @@ function BookmarkInspector({
 
 function DataSafetyBar({
   bookmarkCount,
+  archivedBookmarkCount,
+  deletedBookmarkCount,
   savedViewCount,
   lastBackup,
   cloudStatus,
@@ -901,6 +943,8 @@ function DataSafetyBar({
   onUpgrade
 }: {
   bookmarkCount: number;
+  archivedBookmarkCount: number;
+  deletedBookmarkCount: number;
   savedViewCount: number;
   lastBackup: LastBackupStatus | null;
   cloudStatus: CloudSyncStatus | null;
@@ -921,6 +965,15 @@ function DataSafetyBar({
   const stale = bookmarkCount > 0 && backupAgeMs > 7 * 24 * 60 * 60 * 1000;
   const cloudActive = canUseCloudSync && cloudEnabled;
   const cloudAttention = cloudStatus?.phase === 'attention';
+  const protectedRecordCount =
+    cloudStatus?.phase === 'protected'
+      ? (cloudStatus.bookmarkCount ?? cloudStatus.visibleBookmarkCount ?? bookmarkCount)
+      : bookmarkCount + archivedBookmarkCount + deletedBookmarkCount;
+  const protectedVisibleCount = cloudStatus?.visibleBookmarkCount ?? bookmarkCount;
+  const protectedArchivedCount = cloudStatus?.archivedBookmarkCount;
+  const protectedDeletedCount = cloudStatus?.deletedBookmarkCount;
+  const protectedRetainedCount = cloudStatus?.retainedBookmarkCount;
+  const localRecordCount = bookmarkCount + archivedBookmarkCount + deletedBookmarkCount;
   const cloudCopy = !canUseCloudSync
     ? 'Upgrade to protect this local library with encrypted Cloud Sync.'
     : cloudActive
@@ -940,7 +993,9 @@ function DataSafetyBar({
             </span>
             <span className="text-muted-foreground">{cloudCopy}</span>
             <span className="text-xs text-muted-foreground">
-              {cloudStatus?.bookmarkCount ?? lastBackup?.bookmarkCount ?? bookmarkCount} bookmarks, {cloudStatus?.savedViewCount ?? lastBackup?.savedViewCount ?? savedViewCount} views
+              {protectedRecordCount} total protected records ({protectedVisibleCount} visible
+              {protectedArchivedCount != null ? `, ${protectedArchivedCount} archived` : ''}
+              {protectedDeletedCount != null ? `, ${protectedDeletedCount} in Trash` : protectedArchivedCount == null && protectedRetainedCount ? `, ${protectedRetainedCount} archived or in Trash` : ''}), {cloudStatus?.savedViewCount ?? lastBackup?.savedViewCount ?? savedViewCount} views
             </span>
             {backupStatus ? (
               <span className={cn('text-xs', backupStatus.type === 'error' ? 'text-danger' : 'text-primary')}>{backupStatus.message}</span>
@@ -983,13 +1038,13 @@ function DataSafetyBar({
             <span className="text-sm font-medium text-foreground">{cloudActive ? cloudCopy : formatBackupDate(lastBackup?.at)}</span>
             {lastBackup ? (
               <span className="text-xs text-muted-foreground">
-                {lastBackup.bookmarkCount} bookmarks, {lastBackup.savedViewCount} views
+                {lastBackup.bookmarkCount} total records, {lastBackup.savedViewCount} views
               </span>
             ) : null}
           </div>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
             Chrome removes extension data on uninstall. Cloud Sync keeps an encrypted backup tied to your License Key, while file backup gives you an offline copy.
-            Current library: {bookmarkCount} bookmarks and {savedViewCount} saved views.
+            Current local data: {localRecordCount} total records ({bookmarkCount} visible, {archivedBookmarkCount} archived, {deletedBookmarkCount} in Trash) and {savedViewCount} saved views.
           </p>
           {backupStatus ? (
             <p className={cn('mt-1 text-xs', backupStatus.type === 'error' ? 'text-danger' : 'text-primary')}>{backupStatus.message}</p>
@@ -1330,6 +1385,7 @@ function App() {
   const [folderId, setFolderId] = useState<FolderFilter>(undefined);
   const [tagId, setTagId] = useState<string | null | undefined>(undefined);
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('source');
@@ -1338,6 +1394,7 @@ function App() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [importStatus, setImportStatus] = useState<ImportStatus>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [moveTargetIds, setMoveTargetIds] = useState<string[] | null>(null);
   const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
@@ -1355,6 +1412,7 @@ function App() {
   const [cloudEnabled, setCloudEnabled] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [cloudBusy, setCloudBusy] = useState(false);
+  const [cloudRestoreConfirmOpen, setCloudRestoreConfirmOpen] = useState(false);
   const [backupStatus, setBackupStatus] = useState<ActionToast>(null);
   const [savedViewCounts, setSavedViewCounts] = useState<Record<string, number>>({});
   const debouncedSearchQuery = searchQuery;
@@ -1363,7 +1421,7 @@ function App() {
   const pendingScrollRestoreRef = useRef<number | null>(null);
   const lastSeenLocalDataAtRef = useRef(0);
   const { isPro, license } = useLicenseState();
-  const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived }), [folderId, tagId, includeArchived]);
+  const filters = useMemo<BookmarkListFilters>(() => ({ folderId, tagId, includeArchived, includeDeleted: showTrash }), [folderId, tagId, includeArchived, showTrash]);
   const library = useLibraryData();
   const refreshLibrary = library.refresh;
   const currentViewState = useMemo<ResearchViewState>(
@@ -1523,8 +1581,11 @@ function App() {
   useEffect(() => {
     void getLastBackupStatus().then(setLastBackup);
     void getCloudSyncStatus().then(setCloudStatus);
-    void getSettings().then((settings) => setCloudEnabled(settings.cloudSyncEnabled));
-  }, []);
+    void getSettings().then((settings) => {
+      setCloudEnabled(settings.cloudSyncEnabled);
+      setShowOnboarding(!settings.onboardingDismissed && library.counts.total > 0);
+    });
+  }, [library.counts.total]);
 
   useEffect(
     () =>
@@ -1830,6 +1891,13 @@ function App() {
         return;
       }
 
+      if (confirmDialog.kind === 'permanently-delete-bookmark') {
+        await refreshAfter(permanentlyDeleteBookmarks([confirmDialog.bookmarkId]));
+        setConfirmDialog(null);
+        setActionToast({ type: 'success', message: 'Bookmark permanently deleted.' });
+        return;
+      }
+
       if (confirmDialog.kind === 'bulk-delete') {
         const deletedIds = Array.from(selectedIds);
         await refreshAfter(Promise.all(deletedIds.map((bookmarkId) => softDeleteBookmark(bookmarkId))));
@@ -1998,8 +2066,25 @@ function App() {
   }
 
   function handleAuthorView(authorHandle: string) {
+    setSearchQuery('');
     setAuthorQuery(authorHandle);
     setFocusFilter('all');
+    setFolderId(undefined);
+    setTagId(undefined);
+    setIncludeArchived(false);
+    setShowTrash(false);
+    setActiveViewId(null);
+  }
+
+  function handleDomainView(domain: string) {
+    setSearchQuery(domain);
+    setAuthorQuery('');
+    setFocusFilter('with-links');
+    setFolderId(undefined);
+    setTagId(undefined);
+    setIncludeArchived(false);
+    setShowTrash(false);
+    setActiveViewId(null);
   }
 
   function handleDelete(bookmarkId: string) {
@@ -2010,6 +2095,22 @@ function App() {
       description: 'This removes the saved copy from BookmarkNest.',
       bookmarkId,
       actionLabel: 'Delete bookmark'
+    });
+  }
+
+  async function handleRestore(bookmarkId: string) {
+    await refreshAfter(restoreBookmarks([bookmarkId]));
+    setActionToast({ type: 'success', message: 'Bookmark restored to the library.' });
+  }
+
+  function handlePermanentlyDelete(bookmarkId: string) {
+    setDialogError(null);
+    setConfirmDialog({
+      kind: 'permanently-delete-bookmark',
+      title: 'Delete permanently?',
+      description: 'This bookmark cannot be recovered after permanent deletion.',
+      bookmarkId,
+      actionLabel: 'Delete permanently'
     });
   }
 
@@ -2120,6 +2221,17 @@ function App() {
     }
   }
 
+  function requestCloudRestore() {
+    if (cloudBusy) {
+      return;
+    }
+    if (!canUseCloudSync) {
+      openUpgrade();
+      return;
+    }
+    setCloudRestoreConfirmOpen(true);
+  }
+
   async function handleCloudRestore() {
     if (cloudBusy) {
       return;
@@ -2129,9 +2241,12 @@ function App() {
       return;
     }
 
+    setCloudRestoreConfirmOpen(false);
     setCloudBusy(true);
     setBackupStatus(null);
     try {
+      const safetyBackup = await exportLocalBackup();
+      await downloadText(`bookmarknest-before-cloud-restore-${safetyBackup.exportedAt}.json`, JSON.stringify(safetyBackup, null, 2), 'application/json;charset=utf-8');
       const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RESTORE_CLOUD_BACKUP' });
       if (!response.ok || !response.data) {
         setBackupStatus({ type: 'error', message: response.error ?? 'Cloud restore failed.' });
@@ -2139,7 +2254,7 @@ function App() {
       }
       setCloudStatus(response.data);
       await library.refresh();
-      setBackupStatus({ type: 'success', message: 'Cloud backup restored.' });
+      setBackupStatus({ type: 'success', message: 'Cloud backup restored. A local safety backup was downloaded first.' });
     } finally {
       setCloudBusy(false);
     }
@@ -2168,11 +2283,14 @@ function App() {
 
       await library.refresh();
       const session = response.data?.session;
+      if ((session?.insertedCount ?? 0) > 0) {
+        setShowOnboarding(true);
+      }
       setImportStatus(
         session
           ? {
               type: 'success',
-              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
+              message: `Import complete: ${session.insertedCount} new, ${session.duplicateCount} already saved, ${session.failedCount} failed, ${session.foundCount} fetched from X.`
             }
           : { type: 'success', message: 'Import complete.' }
       );
@@ -2283,18 +2401,33 @@ function App() {
     setFolderId(nextFolderId);
     setTagId(undefined);
     setIncludeArchived(false);
+    setShowTrash(false);
+    setSearchQuery('');
+    setAuthorQuery('');
+    setFocusFilter('all');
+    setActiveViewId(null);
   }
 
   function handleArchivedChange(nextIncludeArchived: boolean) {
     setIncludeArchived(nextIncludeArchived);
     setFolderId(undefined);
     setTagId(undefined);
+    setShowTrash(false);
+    setSearchQuery('');
+    setAuthorQuery('');
+    setFocusFilter('all');
+    setActiveViewId(null);
   }
 
   function handleTagChange(nextTagId?: string | null) {
     setTagId(nextTagId);
     setFolderId(undefined);
     setIncludeArchived(false);
+    setShowTrash(false);
+    setSearchQuery('');
+    setAuthorQuery('');
+    setFocusFilter('all');
+    setActiveViewId(null);
   }
 
   function handleFocusLaneChange(nextFocus: BookmarkFocusFilter) {
@@ -2303,6 +2436,21 @@ function App() {
     setFolderId(undefined);
     setTagId(undefined);
     setIncludeArchived(false);
+    setShowTrash(false);
+    setSearchQuery('');
+    setAuthorQuery('');
+    setActiveViewId(null);
+  }
+
+  function handleTrashChange(nextShowTrash: boolean) {
+    setShowTrash(nextShowTrash);
+    setFolderId(undefined);
+    setTagId(undefined);
+    setIncludeArchived(false);
+    setFocusFilter('all');
+    setSearchQuery('');
+    setAuthorQuery('');
+    setActiveViewId(null);
   }
 
   const visibleTagOptions = tagDialog?.kind === 'remove'
@@ -2345,10 +2493,15 @@ function App() {
           activeFolderId={folderId}
           activeTagId={tagId}
           includeArchived={includeArchived}
+          showTrash={showTrash}
+          researchSources={library.researchSources}
           onFocusChange={handleFocusLaneChange}
           onFolderChange={handleFolderChange}
           onTagChange={handleTagChange}
           onArchivedChange={handleArchivedChange}
+          onTrashChange={handleTrashChange}
+          onAuthorSource={handleAuthorView}
+          onDomainSource={handleDomainView}
           onCreateFolder={() => void handleCreateFolder()}
           onCreateTag={() => void handleCreateTag()}
           onRenameFolder={(nextFolderId) => void handleRenameFolder(nextFolderId)}
@@ -2373,6 +2526,8 @@ function App() {
 
           <DataSafetyBar
             bookmarkCount={library.counts.total}
+            archivedBookmarkCount={library.counts.archived}
+            deletedBookmarkCount={library.counts.deleted}
             savedViewCount={library.savedViews.length}
             lastBackup={lastBackup}
             cloudStatus={cloudStatus}
@@ -2385,9 +2540,27 @@ function App() {
             onRestore={() => void chrome.runtime?.openOptionsPage?.()}
             onEnableCloud={() => void handleEnableCloudSync()}
             onCloudBackup={() => void handleCloudBackup()}
-            onCloudRestore={() => void handleCloudRestore()}
+            onCloudRestore={requestCloudRestore}
             onUpgrade={openUpgrade}
           />
+
+          {showOnboarding ? (
+            <div className="border-b border-accent/35 bg-accent/8 px-4 py-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span className="font-medium text-foreground">Shape this import into a research lane.</span>
+                <div className="flex flex-wrap gap-2">
+                  <Button size="xs" variant="ghost" onClick={() => void handleCreateFolder()}>Create folder</Button>
+                  <Button size="xs" variant="ghost" onClick={() => handleFocusLaneChange('without-notes')}>Review notes</Button>
+                  <Button size="icon" variant="ghost" aria-label="Dismiss onboarding" title="Dismiss" onClick={() => {
+                    setShowOnboarding(false);
+                    void saveSettings({ onboardingDismissed: true });
+                  }}>
+                    <X size={14} />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <div className="border-b border-border bg-surface px-4 py-4">
             <DebouncedFilterInput
@@ -2555,6 +2728,8 @@ function App() {
             onOpen={setActiveBookmarkId}
             onArchive={(bookmarkId, archived) => void handleArchive(bookmarkId, archived)}
             onDelete={handleDelete}
+            onRestore={(bookmarkId) => void handleRestore(bookmarkId)}
+            onPermanentlyDelete={handlePermanentlyDelete}
             onMove={handleMove}
             onTag={handleTag}
             onRemoveTag={handleRemoveTag}
@@ -2623,6 +2798,31 @@ function App() {
         onMove={(nextFolderId) => void handleMoveToFolder(nextFolderId)}
         onCreateAndMove={(folderName) => void handleCreateFolderAndMove(folderName)}
       />
+
+      <Dialog
+        open={cloudRestoreConfirmOpen}
+        title="Restore cloud backup?"
+        description="Your latest encrypted cloud backup will replace this browser's local library."
+        onClose={() => {
+          if (!cloudBusy) {
+            setCloudRestoreConfirmOpen(false);
+          }
+        }}
+        closeOnOverlayClick={!cloudBusy}
+        footer={
+          <>
+            <Button onClick={() => setCloudRestoreConfirmOpen(false)} disabled={cloudBusy}>Cancel</Button>
+            <Button variant="danger" onClick={() => void handleCloudRestore()} disabled={cloudBusy}>
+              {cloudBusy ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+              {cloudBusy ? 'Restoring...' : 'Restore backup'}
+            </Button>
+          </>
+        }
+      >
+        <div className="rounded-app border border-accent/25 bg-accent/10 px-3 py-2 text-sm text-muted-foreground">
+          BookmarkNest will download a local safety backup before replacing any data.
+        </div>
+      </Dialog>
 
       <Dialog open={showShortcuts} title="Keyboard shortcuts" onClose={() => setShowShortcuts(false)}>
         <div className="space-y-2 text-sm leading-6 text-muted-foreground">

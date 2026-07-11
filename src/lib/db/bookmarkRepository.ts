@@ -1,6 +1,6 @@
 import type { Collection } from 'dexie';
 
-import type { Bookmark, BookmarkFocusFilter, BookmarkInput, BookmarkSortKey, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
+import type { AutoOrganizeRule, Bookmark, BookmarkFocusFilter, BookmarkInput, BookmarkSortKey, Folder, ImportSession, SavedView, Tag } from '../../shared/types';
 import { buildBookmarkAuthorSearchText, buildBookmarkSearchText, tokenizeSearchText } from '../bookmarks/searchText';
 import { tokenizeSearchQuery } from '../search/searchBookmarks';
 import { db, type SearchMetadata } from './database';
@@ -287,6 +287,19 @@ export async function restoreBookmarks(bookmarkIds: string[]) {
   });
 }
 
+export async function permanentlyDeleteBookmarks(bookmarkIds: string[]) {
+  const bookmarks = await db.bookmarks.where('id').anyOf(bookmarkIds).toArray();
+  const deletedIds = bookmarks.filter((bookmark) => bookmark.deleted).map((bookmark) => bookmark.id);
+  if (deletedIds.length === 0) {
+    return;
+  }
+
+  await db.transaction('rw', db.bookmarks, db.searchMetadata, async () => {
+    await db.bookmarks.bulkDelete(deletedIds);
+    await db.searchMetadata.where('bookmarkId').anyOf(deletedIds).delete();
+  });
+}
+
 export async function setBookmarkArchived(bookmarkId: string, archived: boolean) {
   await db.bookmarks.update(bookmarkId, {
     archived,
@@ -511,6 +524,26 @@ export async function addTagToBookmarks(bookmarkIds: string[], tagId: string) {
   await refreshSearchMetadataForBookmarks(bookmarkIds);
 }
 
+export async function applyAutoOrganizeRules(bookmarks: Bookmark[], rules: AutoOrganizeRule[]) {
+  for (const rule of rules) {
+    const needle = rule.value.trim().toLowerCase();
+    if (!needle) continue;
+    const matches = bookmarks.filter((bookmark) => {
+      if (rule.kind === 'author') return bookmark.authorHandle.toLowerCase() === needle.replace(/^@/, '');
+      return new RegExp(`https?:\\/\\/([^\\s/]+\\.)?${needle.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}(?:[\\s/]|$)`, 'i').test(bookmark.contentText);
+    });
+    if (!matches.length) continue;
+    if (rule.markForExport) {
+      await Promise.all(matches.map((bookmark) => setBookmarkMarkedForExport(bookmark.id, true)));
+    }
+    if (rule.tagName?.trim()) {
+      const existing = await db.tags.where('name').equals(rule.tagName.trim()).first();
+      const tag = existing ?? await createTag(rule.tagName.trim());
+      await addTagToBookmarks(matches.map((bookmark) => bookmark.id), tag.id);
+    }
+  }
+}
+
 export async function removeTagFromBookmark(bookmarkId: string, tagId: string) {
   await db.transaction('rw', db.bookmarks, db.tags, async () => {
     await db.bookmarks.update(bookmarkId, (bookmark) => {
@@ -565,6 +598,7 @@ export interface BookmarkListFilters {
   folderId?: string | null;
   tagId?: string | null;
   includeArchived?: boolean;
+  includeDeleted?: boolean;
 }
 
 export interface BookmarkListItem extends Bookmark {
@@ -667,7 +701,7 @@ async function listBookmarksRaw(filters: BookmarkListFilters = {}, archiveScope:
     return db.bookmarks
       .where('folderId')
       .equals(filters.folderId as string)
-      .and((bookmark) => !bookmark.deleted && matchesArchiveScope(bookmark, archiveScope) && (!filterByTag || bookmark.tagIds.includes(filters.tagId as string)))
+      .and((bookmark) => (filters.includeDeleted ? bookmark.deleted : !bookmark.deleted) && matchesArchiveScope(bookmark, archiveScope) && (!filterByTag || bookmark.tagIds.includes(filters.tagId as string)))
       .toArray();
   }
 
@@ -675,7 +709,7 @@ async function listBookmarksRaw(filters: BookmarkListFilters = {}, archiveScope:
     .toCollection()
     .and(
       (bookmark) =>
-        !bookmark.deleted &&
+        (filters.includeDeleted ? bookmark.deleted : !bookmark.deleted) &&
         matchesArchiveScope(bookmark, archiveScope) &&
         matchesFolderFilter(bookmark, filters.folderId) &&
         (!filterByTag || bookmark.tagIds.includes(filters.tagId as string))
@@ -684,7 +718,7 @@ async function listBookmarksRaw(filters: BookmarkListFilters = {}, archiveScope:
 }
 
 export async function listBookmarkItems(filters: BookmarkListFilters = {}): Promise<BookmarkListItem[]> {
-  const archiveScope = filters.includeArchived ? 'archived' : 'active';
+  const archiveScope: BookmarkArchiveScope = filters.includeDeleted ? 'all' : filters.includeArchived ? 'archived' : 'active';
   const [bookmarks, folders, tags] = await Promise.all([listBookmarksRaw(filters, archiveScope), db.folders.toArray(), db.tags.toArray()]);
 
   return mapBookmarkListItems(bookmarks.sort(compareBookmarksBySourceOrder), folders, tags);
@@ -708,6 +742,12 @@ function matchesFocusFilter(bookmark: BookmarkListItem, focus: SavedView['focus'
   }
   if (focus === 'with-media') {
     return bookmark.mediaUrls.length > 0;
+  }
+  if (focus === 'with-links') {
+    return /https?:\/\/[^\s)]+/i.test(bookmark.contentText);
+  }
+  if (focus === 'threads') {
+    return /🧵|\bthread\b|\b1\/\d+\b/i.test(bookmark.contentText);
   }
   if (focus === 'unfiled') {
     return !bookmark.folderId;
@@ -733,7 +773,10 @@ async function getCandidateBookmarkIdsForTerms(terms: string[]) {
     return null;
   }
 
-  if (terms.some((term) => term.length < 2)) {
+  // The token index splits URL punctuation (for example github.com into
+  // github and com). Keep domains and other punctuated queries on the full
+  // search-text path so source aggregation links return their matching posts.
+  if (terms.some((term) => term.length < 2 || /[^\p{L}\p{N}]/u.test(term))) {
     return null;
   }
 
@@ -813,7 +856,7 @@ async function queryBookmarksInternal(
   const sortKey = request.sortKey ?? 'source';
   const offset = request.offset ?? 0;
   const limit = options?.limitOverride ?? request.limit ?? 200;
-  const archiveScope: BookmarkArchiveScope = filters.includeArchived ? 'archived' : 'active';
+  const archiveScope: BookmarkArchiveScope = filters.includeDeleted ? 'all' : filters.includeArchived ? 'archived' : 'active';
   const terms = tokenizeSearchQuery(request.query ?? '');
   const candidateIds = await getCandidateBookmarkIdsForTerms(terms);
   const [folders, tags] = await Promise.all([db.folders.toArray(), db.tags.toArray()]);
@@ -827,7 +870,7 @@ async function queryBookmarksInternal(
 
   await iterateSortedBookmarks(sortKey, (bookmark) => {
     if (
-      bookmark.deleted ||
+      (filters.includeDeleted ? !bookmark.deleted : bookmark.deleted) ||
       (candidateIds != null && !candidateIds.has(bookmark.id)) ||
       !matchesArchiveScope(bookmark, archiveScope) ||
       !matchesFolderFilter(bookmark, filters.folderId) ||
@@ -911,8 +954,34 @@ export async function getSavedViewCounts(savedViews: SavedView[]): Promise<Recor
   return counts;
 }
 
+export interface ResearchSourceSummary {
+  value: string;
+  count: number;
+}
+
+export async function getResearchSourceSummaries() {
+  const bookmarks = await db.bookmarks.filter((bookmark) => !bookmark.deleted && !bookmark.archived).toArray();
+  const authors = new Map<string, number>();
+  const domains = new Map<string, number>();
+  for (const bookmark of bookmarks) {
+    const handle = bookmark.authorHandle.trim().replace(/^@/, '').toLowerCase();
+    if (handle) authors.set(handle, (authors.get(handle) ?? 0) + 1);
+    for (const rawUrl of bookmark.contentText.match(/https?:\/\/[^\s)]+/gi) ?? []) {
+      try {
+        const domain = new URL(rawUrl).hostname.replace(/^www\./, '').toLowerCase();
+        if (!['x.com', 'twitter.com', 't.co'].includes(domain)) domains.set(domain, (domains.get(domain) ?? 0) + 1);
+      } catch {
+        // Ignore malformed URLs in imported post text.
+      }
+    }
+  }
+  const sort = (entries: Map<string, number>): ResearchSourceSummary[] => Array.from(entries, ([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value)).slice(0, 6);
+  return { authors: sort(authors), domains: sort(domains) };
+}
+
 export interface BookmarkCounts {
   total: number;
+  deleted: number;
   uncategorized: number;
   archived: number;
   withNotes: number;
@@ -921,7 +990,7 @@ export interface BookmarkCounts {
 }
 
 export async function getBookmarkCounts(): Promise<BookmarkCounts> {
-  const bookmarks = await db.bookmarks.filter((b) => !b.deleted).toArray();
+  const [bookmarks, deleted] = await Promise.all([db.bookmarks.filter((b) => !b.deleted).toArray(), db.bookmarks.filter((b) => b.deleted).count()]);
   const active = bookmarks.filter((b) => !b.archived);
   const byFolder: Record<string, number> = {};
   let uncategorized = 0;
@@ -942,6 +1011,7 @@ export async function getBookmarkCounts(): Promise<BookmarkCounts> {
   }
   return {
     total: active.length,
+    deleted,
     uncategorized,
     archived: bookmarks.length - active.length,
     withNotes,

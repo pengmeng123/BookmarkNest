@@ -105,4 +105,22 @@ describe('cloud sync service', () => {
     });
     expect(mocks.uploadCloudSnapshot).not.toHaveBeenCalled();
   });
+
+  it('reports visible bookmarks separately from archived and deleted backup records', async () => {
+    const { runCloudBackup } = await import('./service');
+    mocks.exportLocalBackup.mockResolvedValue({
+      ...backup,
+      bookmarks: [
+        { archived: false, deleted: false },
+        { archived: true, deleted: false },
+        { archived: false, deleted: true }
+      ]
+    });
+
+    await runCloudBackup({ baseUrl: 'https://api.example.com' });
+
+    expect(mocks.setCloudSyncStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ bookmarkCount: 3, visibleBookmarkCount: 1, retainedBookmarkCount: 2 })
+    );
+  });
 });

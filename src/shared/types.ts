@@ -1,6 +1,6 @@
 export type BookmarkSource = 'x-bookmarks-page' | 'manual-import';
 export type BookmarkSortKey = 'source' | 'date-posted' | 'date-imported' | 'author';
-export type BookmarkFocusFilter = 'all' | 'with-notes' | 'without-notes' | 'with-media' | 'unfiled' | 'export-queue';
+export type BookmarkFocusFilter = 'all' | 'with-notes' | 'without-notes' | 'with-media' | 'with-links' | 'threads' | 'unfiled' | 'export-queue';
 
 export interface Bookmark {
   id: string;
@@ -100,9 +100,19 @@ export interface Settings {
   cloudSyncEnabled: boolean;
   cloudSyncIntervalMinutes: number;
   cloudSyncDeviceName?: string;
+  onboardingDismissed?: boolean;
+  autoOrganizeRules?: AutoOrganizeRule[];
   // When true, a complete import soft-deletes local X bookmarks that are no
   // longer present on x.com (i.e. were un-bookmarked there). Default off.
   mirrorRemovals: boolean;
+}
+
+export interface AutoOrganizeRule {
+  id: string;
+  kind: 'domain' | 'author';
+  value: string;
+  tagName?: string;
+  markForExport?: boolean;
 }
 
 export type LicenseValidationStatus = 'valid' | 'invalid' | 'offline' | 'unknown';
@@ -119,8 +129,11 @@ export interface LastSyncStatus {
   failed?: number;
   removed?: number;
   found?: number;
+  // Local record breakdown after the import. "Visible" excludes archive and Trash.
   visibleBookmarkCount?: number;
   totalStoredBookmarkCount?: number;
+  archivedBookmarkCount?: number;
+  deletedBookmarkCount?: number;
   error?: string;
 }
 
@@ -146,7 +159,12 @@ export interface CloudSyncStatus {
   remoteSnapshotId?: string;
   lastSnapshotHash?: string;
   lastUploadResult?: 'uploaded' | 'unchanged' | 'rate-limited';
+  // All records are retained in the backup so archived and trash entries can be restored.
   bookmarkCount?: number;
+  visibleBookmarkCount?: number;
+  archivedBookmarkCount?: number;
+  deletedBookmarkCount?: number;
+  retainedBookmarkCount?: number;
   savedViewCount?: number;
   nextRunAt?: number;
 }
@@ -179,6 +197,7 @@ export type ExtensionMessage =
   | { type: 'GET_AUTO_SYNC_STATUS' }
   | { type: 'RUN_CLOUD_BACKUP' }
   | { type: 'RESTORE_CLOUD_BACKUP' }
+  | { type: 'RESTORE_CLOUD_SNAPSHOT'; snapshotId: string }
   | { type: 'GET_IMPORT_DIAGNOSTICS' }
   | { type: 'CAPTURE_X_BOOKMARKS_REQUEST'; payload: CapturedBookmarksRequest }
   | { type: 'SAVE_IMPORTED_BOOKMARKS'; payload: ImportPayload }

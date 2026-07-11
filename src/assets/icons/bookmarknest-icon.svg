@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title>BookmarkNest</title>
+  <rect width="512" height="512" rx="112" fill="#183e3a"/>
+  <path d="M154 124c0-18 14-32 32-32h140c18 0 32 14 32 32v268c0 22-25 34-42 20l-60-48-60 48c-17 14-42 2-42-20V124Z" fill="#f7f8f4"/>
+  <path d="M218 156h76c12 0 22 10 22 22v112c0 12-10 22-22 22h-76c-12 0-22-10-22-22V178c0-12 10-22 22-22Z" fill="#183e3a"/>
+  <circle cx="328" cy="164" r="34" fill="#dc7256"/>
+  <path d="m313 164 11 11 20-23" fill="none" stroke="#f7f8f4" stroke-linecap="round" stroke-linejoin="round" stroke-width="10"/>
+</svg>

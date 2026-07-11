@@ -15,6 +15,7 @@ export const defaultSettings: Settings = {
   syncIntervalMinutes: 60,
   cloudSyncEnabled: false,
   cloudSyncIntervalMinutes: 360,
+  autoOrganizeRules: [],
   mirrorRemovals: false
 };
 
@@ -40,7 +41,13 @@ export async function getSettings(): Promise<Settings> {
   }
 
   const result = await chrome.storage.local.get(SETTINGS_KEY);
-  return { ...defaultSettings, ...(result[SETTINGS_KEY] as Partial<Settings> | undefined) };
+  const settings = { ...defaultSettings, ...(result[SETTINGS_KEY] as Partial<Settings> | undefined) };
+  return {
+    ...settings,
+    // Older development builds allowed a 2-minute interval. Keep existing
+    // users on the shortest supported production interval instead.
+    syncIntervalMinutes: settings.syncIntervalMinutes < 30 ? 30 : settings.syncIntervalMinutes
+  };
 }
 
 export async function saveSettings(settings: Partial<Settings>) {

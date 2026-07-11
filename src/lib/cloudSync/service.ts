@@ -2,6 +2,7 @@ import { canUseCapability } from '../license/pro';
 import { exportLocalBackup, importLocalBackup } from '../db/bookmarkRepository';
 import {
   decryptCloudSnapshot,
+  getCloudSnapshotById,
   encryptLocalBackup,
   fingerprintLocalBackup,
   getLatestCloudSnapshot,
@@ -35,6 +36,19 @@ function nextRunAt(intervalMinutes: number) {
   return Date.now() + intervalMinutes * 60 * 1000;
 }
 
+function getBackupBookmarkCounts(backup: Awaited<ReturnType<typeof exportLocalBackup>>) {
+  const visibleBookmarkCount = backup.bookmarks.filter((bookmark) => !bookmark.deleted && !bookmark.archived).length;
+  const archivedBookmarkCount = backup.bookmarks.filter((bookmark) => !bookmark.deleted && bookmark.archived).length;
+  const deletedBookmarkCount = backup.bookmarks.filter((bookmark) => bookmark.deleted).length;
+  return {
+    bookmarkCount: backup.bookmarks.length,
+    visibleBookmarkCount,
+    archivedBookmarkCount,
+    deletedBookmarkCount,
+    retainedBookmarkCount: archivedBookmarkCount + deletedBookmarkCount
+  };
+}
+
 async function setAttention(error: unknown, enabled: boolean): Promise<CloudSyncStatus> {
   const status: CloudSyncStatus = {
     phase: 'attention',
@@ -65,6 +79,7 @@ export async function runCloudBackup(config?: CloudSyncClientConfig): Promise<Me
 
   try {
     const backup = await exportLocalBackup();
+    const backupCounts = getBackupBookmarkCounts(backup);
     const contentHash = await fingerprintLocalBackup(backup, license.licenseKey);
     const now = Date.now();
     const lastSuccessAt = previousStatus?.lastSuccessAt ?? 0;
@@ -78,7 +93,7 @@ export async function runCloudBackup(config?: CloudSyncClientConfig): Promise<Me
         remoteSnapshotId: previousStatus.remoteSnapshotId,
         lastSnapshotHash: contentHash,
         lastUploadResult: 'unchanged',
-        bookmarkCount: backup.bookmarks.length,
+        ...backupCounts,
         savedViewCount: backup.savedViews.length,
         nextRunAt: nextRunAt(settings.cloudSyncIntervalMinutes)
       };
@@ -99,6 +114,10 @@ export async function runCloudBackup(config?: CloudSyncClientConfig): Promise<Me
         lastSnapshotHash: previousStatus?.lastSnapshotHash,
         lastUploadResult: 'rate-limited',
         bookmarkCount: previousStatus?.bookmarkCount,
+        visibleBookmarkCount: previousStatus?.visibleBookmarkCount,
+        archivedBookmarkCount: previousStatus?.archivedBookmarkCount,
+        deletedBookmarkCount: previousStatus?.deletedBookmarkCount,
+        retainedBookmarkCount: previousStatus?.retainedBookmarkCount,
         savedViewCount: previousStatus?.savedViewCount,
         nextRunAt: nextRunAt(settings.cloudSyncIntervalMinutes)
       };
@@ -111,7 +130,7 @@ export async function runCloudBackup(config?: CloudSyncClientConfig): Promise<Me
     const uploaded = await uploadCloudSnapshot(license, snapshot, deviceName, config);
     const lastBackup: LastBackupStatus = {
       at: backup.exportedAt,
-      bookmarkCount: backup.bookmarks.length,
+      bookmarkCount: backupCounts.bookmarkCount,
       savedViewCount: backup.savedViews.length,
       filename: backupFilename(backup.exportedAt)
     };
@@ -125,7 +144,7 @@ export async function runCloudBackup(config?: CloudSyncClientConfig): Promise<Me
       remoteSnapshotId: uploaded.snapshotId,
       lastSnapshotHash: contentHash,
       lastUploadResult: uploaded.unchanged ? 'unchanged' : 'uploaded',
-      bookmarkCount: backup.bookmarks.length,
+      ...backupCounts,
       savedViewCount: backup.savedViews.length,
       nextRunAt: nextRunAt(settings.cloudSyncIntervalMinutes)
     };
@@ -151,12 +170,13 @@ export async function restoreLatestCloudBackup(config?: CloudSyncClientConfig): 
   try {
     const remote = await getLatestCloudSnapshot(license, config);
     const backup = await decryptCloudSnapshot(remote.snapshot, license.licenseKey);
+    const backupCounts = getBackupBookmarkCounts(backup);
     await importLocalBackup(backup);
     await markLocalDataChanged('backup-imported');
 
     const lastBackup: LastBackupStatus = {
       at: backup.exportedAt,
-      bookmarkCount: backup.bookmarks.length,
+      bookmarkCount: backupCounts.bookmarkCount,
       savedViewCount: backup.savedViews.length,
       filename: backupFilename(backup.exportedAt)
     };
@@ -168,10 +188,33 @@ export async function restoreLatestCloudBackup(config?: CloudSyncClientConfig): 
       lastRunAt: Date.now(),
       lastSuccessAt: Date.now(),
       remoteSnapshotId: remote.snapshotId,
-      bookmarkCount: backup.bookmarks.length,
+      ...backupCounts,
       savedViewCount: backup.savedViews.length,
       nextRunAt: enabled ? nextRunAt(settings.cloudSyncIntervalMinutes) : undefined
     };
+    await setCloudSyncStatus(status);
+    return { ok: true, data: status };
+  } catch (error) {
+    const status = await setAttention(error, enabled);
+    return { ok: false, error: status.lastError };
+  }
+}
+
+export async function restoreCloudSnapshot(snapshotId: string, config?: CloudSyncClientConfig): Promise<MessageResponse<CloudSyncStatus>> {
+  const [license, settings] = await Promise.all([getLicenseData(), getSettings()]);
+  const enabled = settings.cloudSyncEnabled;
+  if (!canUseCapability(license, 'cloud-sync')) {
+    const status = await setAttention('Cloud Sync requires Pro.', enabled);
+    return { ok: false, error: status.lastError };
+  }
+  await setCloudSyncStatus({ phase: 'syncing', enabled, lastRunAt: Date.now() });
+  try {
+    const remote = await getCloudSnapshotById(license, snapshotId, config);
+    const backup = await decryptCloudSnapshot(remote.snapshot, license.licenseKey);
+    const backupCounts = getBackupBookmarkCounts(backup);
+    await importLocalBackup(backup);
+    await markLocalDataChanged('backup-imported');
+    const status: CloudSyncStatus = { phase: 'protected', enabled, lastRunAt: Date.now(), lastSuccessAt: Date.now(), remoteSnapshotId: remote.snapshotId, ...backupCounts, savedViewCount: backup.savedViews.length };
     await setCloudSyncStatus(status);
     return { ok: true, data: status };
   } catch (error) {

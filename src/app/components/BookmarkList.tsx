@@ -17,6 +17,8 @@ interface BookmarkListProps {
   onOpen: (bookmarkId: string) => void;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
+  onRestore: (bookmarkId: string) => void;
+  onPermanentlyDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
   onTag: (bookmarkId: string) => void;
   onRemoveTag: (bookmarkId: string) => void;
@@ -81,6 +83,8 @@ function BookmarkListView({
   onOpen,
   onArchive,
   onDelete,
+  onRestore,
+  onPermanentlyDelete,
   onMove,
   onTag,
   onRemoveTag,
@@ -180,7 +184,9 @@ function BookmarkListView({
             active={activeBookmarkId === bookmark.id}
             onOpen={onOpen}
             onArchive={onArchive}
-            onDelete={onDelete}
+          onDelete={onDelete}
+          onRestore={onRestore}
+          onPermanentlyDelete={onPermanentlyDelete}
             onMove={onMove}
             onTag={onTag}
             onRemoveTag={onRemoveTag}

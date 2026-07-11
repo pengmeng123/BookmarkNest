@@ -250,6 +250,15 @@ export async function getLatestCloudSnapshot(license: LicenseData, config?: Clou
   );
 }
 
+export async function getCloudSnapshotById(license: LicenseData, snapshotId: string, config?: CloudSyncClientConfig) {
+  assertLicense(license);
+  return requestCloud<{ snapshotId: string; createdAt: number; snapshot: EncryptedCloudSnapshot }>(
+    '/cloud-sync/snapshots/get',
+    { licenseKey: license.licenseKey, instanceId: license.instanceId, snapshotId },
+    config
+  );
+}
+
 export async function listCloudSnapshots(license: LicenseData, config?: CloudSyncClientConfig) {
   assertLicense(license);
   return requestCloud<{ snapshots: CloudSyncSnapshotSummary[] }>(

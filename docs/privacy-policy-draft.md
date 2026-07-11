@@ -34,7 +34,9 @@ Users can:
 
 ## Third-Party Services
 
-BookmarkNest uses Creem for monthly and annual subscription checkout and license keys. License activation and validation are proxied through a Cloudflare Worker so the extension does not include Creem API secrets.
+BookmarkNest uses Creem for Monthly Pro, Annual Pro, and Lifetime Pro checkout and license keys. License activation and validation are proxied through a Cloudflare Worker so the extension does not include Creem API secrets.
+
+Lifetime Pro is a one-time purchase for the Pro features available in BookmarkNest while the product is available. Cloud Sync retains up to five encrypted backup versions and may throttle changed backups to one per minute.
 
 ## Contact
 

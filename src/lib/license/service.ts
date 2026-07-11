@@ -43,13 +43,8 @@ export async function validateStoredLicenseIfNeeded() {
 
 export async function deactivateStoredLicense() {
   const current = await getLicenseData();
-  try {
-    if (current.licenseKey) {
-      await deactivateLicense(current);
-    }
-  } catch {
-    // Local deactivation must still unblock switching keys when the network or
-    // license service is unavailable.
+  if (current.licenseKey) {
+    await deactivateLicense(current);
   }
   await clearLicenseData();
   return emptyLicenseData;

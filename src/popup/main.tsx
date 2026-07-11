@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Button } from '../components/Button';
 import { useTheme } from '../hooks/useTheme';
-import { getBookmarkCounts } from '../lib/db/bookmarkRepository';
+import { getBookmarkCounts, type BookmarkCounts } from '../lib/db/bookmarkRepository';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import { getLastSyncStatus, subscribeToLocalStateChanges } from '../lib/storage/localStorage';
 import type { ImportSession, LastSyncStatus } from '../shared/types';
@@ -38,31 +38,46 @@ function describeLastSync(sync: LastSyncStatus) {
     return `Last sync failed (${formatSyncTime(sync.at)}): ${formatImportError(sync.error)}`;
   }
 
-  const libraryCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
-  const parts = libraryCount != null ? [`${libraryCount} in library`] : [];
+  const visibleCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
+  const archivedCount = sync.archivedBookmarkCount ?? 0;
+  const deletedCount = sync.deletedBookmarkCount ?? 0;
+  const hasRecordBreakdown = sync.archivedBookmarkCount != null || sync.deletedBookmarkCount != null;
+  const totalLocalRecords = visibleCount != null ? visibleCount + archivedCount + deletedCount : undefined;
+  const parts = visibleCount != null
+    ? [
+        hasRecordBreakdown
+          ? `${totalLocalRecords} local records (${visibleCount} visible, ${archivedCount} archived, ${deletedCount} in Trash)`
+          : `${visibleCount} visible bookmarks`
+      ]
+    : [];
   parts.push(`${sync.inserted ?? 0} new`);
   if (sync.duplicate != null) {
-    parts.push(`${sync.duplicate} duplicate`);
+    parts.push(`${sync.duplicate} already saved`);
   }
   if (sync.failed) {
     parts.push(`${sync.failed} failed`);
   }
   if (sync.removed) {
-    parts.push(`${sync.removed} removed`);
+    parts.push(`${sync.removed} moved to Trash`);
   }
-  parts.push(`${sync.found ?? 0} fetched`);
+  parts.push(`${sync.found ?? 0} fetched from X`);
   return `Last sync ${formatSyncTime(sync.at)}: ${parts.join(', ')}`;
+}
+
+function describeLocalCounts(counts: BookmarkCounts) {
+  const total = counts.total + counts.archived + counts.deleted;
+  return `${counts.total} visible · ${counts.archived} archived · ${counts.deleted} in Trash · ${total} total local records`;
 }
 
 function Popup() {
   useTheme();
   const [status, setStatus] = useState<string | null>(null);
   const [importMode, setImportMode] = useState<'visible' | 'auto-scroll' | null>(null);
-  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [bookmarkCounts, setBookmarkCounts] = useState<BookmarkCounts | null>(null);
   const [lastSync, setLastSync] = useState<LastSyncStatus | null>(null);
 
   useEffect(() => {
-    void getBookmarkCounts().then((c) => setTotalCount(c.total));
+    void getBookmarkCounts().then(setBookmarkCounts);
     void getLastSyncStatus().then(setLastSync);
     void chrome.action?.setBadgeText?.({ text: '' });
   }, []);
@@ -71,7 +86,7 @@ function Popup() {
     () =>
       subscribeToLocalStateChanges({
         onLocalDataChange: () => {
-          void getBookmarkCounts().then((c) => setTotalCount(c.total));
+          void getBookmarkCounts().then(setBookmarkCounts);
           void getLastSyncStatus().then(setLastSync);
         },
         onLastSyncChange: setLastSync
@@ -100,10 +115,10 @@ function Popup() {
       const session = response.data?.session;
       setStatus(
         session
-          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
+          ? `Import complete: ${session.insertedCount} new, ${session.duplicateCount} already saved, ${session.failedCount} failed, ${session.foundCount} fetched from X.`
           : 'Import started.'
       );
-      void getBookmarkCounts().then((c) => setTotalCount(c.total));
+      void getBookmarkCounts().then(setBookmarkCounts);
       void getLastSyncStatus().then(setLastSync);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Import failed. Please try again.');
@@ -117,7 +132,7 @@ function Popup() {
       <header className="mb-4">
         <h1 className="text-lg font-semibold">BookmarkNest</h1>
         <p className="text-xs text-muted-foreground">
-          {totalCount === null ? ' ' : totalCount === 0 ? 'No bookmarks imported yet' : `${totalCount} bookmarks saved`}
+          {bookmarkCounts === null ? ' ' : bookmarkCounts.total + bookmarkCounts.archived + bookmarkCounts.deleted === 0 ? 'No bookmarks imported yet' : describeLocalCounts(bookmarkCounts)}
         </p>
       </header>
       <div className="grid gap-2">

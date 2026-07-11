@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Archive, BookMarked, Check, ExternalLink, FilePenLine, FolderInput, Link, MoreHorizontal, Tag, Trash2, UserRound } from 'lucide-react';
+import { Archive, BookMarked, Check, ExternalLink, FilePenLine, FolderInput, Link, MoreHorizontal, RotateCcw, Tag, Trash2, UserRound } from 'lucide-react';
 
 import { Button } from '../../components/Button';
 import { getBookmarkSignals } from '../../lib/bookmarks/metadata';
@@ -14,6 +14,8 @@ interface BookmarkCardProps {
   onOpen: (bookmarkId: string) => void;
   onArchive: (bookmarkId: string, archived: boolean) => void;
   onDelete: (bookmarkId: string) => void;
+  onRestore: (bookmarkId: string) => void;
+  onPermanentlyDelete: (bookmarkId: string) => void;
   onMove: (bookmarkId: string) => void;
   onTag: (bookmarkId: string) => void;
   onRemoveTag: (bookmarkId: string) => void;
@@ -74,6 +76,8 @@ export const BookmarkCard = memo(function BookmarkCard({
   onOpen,
   onArchive,
   onDelete,
+  onRestore,
+  onPermanentlyDelete,
   onMove,
   onTag,
   onRemoveTag,
@@ -272,6 +276,19 @@ export const BookmarkCard = memo(function BookmarkCard({
         </button>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border/70 pt-3 sm:pl-7">
+        {bookmark.deleted ? (
+          <>
+            <Button size="sm" variant="secondary" onClick={() => onRestore(bookmark.id)}>
+              <RotateCcw size={14} />
+              Restore
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => onPermanentlyDelete(bookmark.id)}>
+              <Trash2 size={14} />
+              Delete permanently
+            </Button>
+          </>
+        ) : (
+          <>
         {bookmark.tweetUrl ? (
           <Button size="sm" className="flex-1 sm:flex-none" onClick={() => window.open(bookmark.tweetUrl, '_blank', 'noopener,noreferrer')}>
             <ExternalLink size={14} />
@@ -391,6 +408,8 @@ export const BookmarkCard = memo(function BookmarkCard({
             </div>
           ) : null}
         </div>
+          </>
+        )}
       </div>
     </article>
   );

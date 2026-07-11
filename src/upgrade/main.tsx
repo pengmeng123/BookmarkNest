@@ -13,6 +13,7 @@ import '../styles/globals.css';
 
 const MONTHLY_CHECKOUT_URL = import.meta.env.VITE_CREEM_MONTHLY_CHECKOUT_URL as string | undefined;
 const ANNUAL_CHECKOUT_URL = (import.meta.env.VITE_CREEM_ANNUAL_CHECKOUT_URL ?? import.meta.env.VITE_CREEM_CHECKOUT_URL) as string | undefined;
+const LIFETIME_CHECKOUT_URL = import.meta.env.VITE_CREEM_LIFETIME_CHECKOUT_URL as string | undefined;
 const SUPPORT_EMAIL = (import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) ?? 'pp12111@outlook.com';
 
 const freeFeatures = [
@@ -29,7 +30,7 @@ const proFeatures = [
   'Markdown and CSV export',
   'Bulk select, move, tag, and delete',
   'Background sync, mirror removals, and encrypted cloud backup',
-  'Future Pro feature updates'
+  'Pro feature updates while BookmarkNest is available'
 ];
 
 const workflows = [
@@ -181,7 +182,7 @@ function Upgrade() {
           </div>
         </header>
 
-        <section className="mt-8 grid gap-4 lg:grid-cols-3">
+        <section className="mt-8 grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
           <PlanCard
             title="Free"
             price="$0"
@@ -220,6 +221,20 @@ function Upgrade() {
             }
             note="Billed once per year. Cancel anytime from the payment provider portal."
           />
+          <PlanCard
+            title="Lifetime Pro"
+            price="$49"
+            caption="One payment for permanent Pro access"
+            badge="Launch offer"
+            features={proFeatures.map((text) => ({ text, included: true }))}
+            action={
+              <Button variant="secondary" className="w-full" onClick={() => openCheckout(LIFETIME_CHECKOUT_URL, setStatus)}>
+                Get lifetime access
+                <ExternalLink size={16} />
+              </Button>
+            }
+            note="One-time purchase. Cloud Sync retains up to five backup versions and may throttle changed backups to one per minute."
+          />
         </section>
 
         <section className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">
@@ -229,7 +244,6 @@ function Upgrade() {
               <div className="flex flex-wrap gap-2">
                 <PromisePill icon={<ShieldCheck size={14} />} text="Local-first" />
                 <PromisePill icon={<Sparkles size={14} />} text="Future Pro updates" />
-                <PromisePill icon={<CalendarClock size={14} />} text="Cancel anytime" />
               </div>
             </div>
             <div className="mt-5 grid gap-x-6 gap-y-1 sm:grid-cols-2">

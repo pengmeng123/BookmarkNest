@@ -1,6 +1,6 @@
 import { EXTENSION_PAGES } from '../shared/constants';
-import { restoreLatestCloudBackup, runCloudBackup } from '../lib/cloudSync/service';
-import { createDedupeKey, softDeleteMissingXBookmarks, upsertBookmark } from '../lib/db/bookmarkRepository';
+import { restoreCloudSnapshot, restoreLatestCloudBackup, runCloudBackup } from '../lib/cloudSync/service';
+import { applyAutoOrganizeRules, createDedupeKey, softDeleteMissingXBookmarks, upsertBookmark } from '../lib/db/bookmarkRepository';
 import { db } from '../lib/db/database';
 import { parseGraphqlBookmarks } from '../content/x/graphqlParser';
 import { findBottomCursor } from '../content/x/graphqlCursor';
@@ -661,9 +661,11 @@ async function primeCapturedBookmarksRequest({ active = true }: { active?: boole
 // can show "last sync" and, crucially, surface otherwise-silent failures.
 async function recordSyncStatus(response: MessageResponse<{ session: ImportSession; removedCount?: number }>) {
   const session = response.data?.session;
-  const [visibleBookmarkCount, totalStoredBookmarkCount] = await Promise.all([
+  const [visibleBookmarkCount, totalStoredBookmarkCount, archivedBookmarkCount, deletedBookmarkCount] = await Promise.all([
     db.bookmarks.filter((bookmark) => !bookmark.deleted && !bookmark.archived).count(),
-    db.bookmarks.filter((bookmark) => !bookmark.deleted).count()
+    db.bookmarks.filter((bookmark) => !bookmark.deleted).count(),
+    db.bookmarks.filter((bookmark) => !bookmark.deleted && bookmark.archived).count(),
+    db.bookmarks.filter((bookmark) => bookmark.deleted).count()
   ]);
   await setLastSyncStatus({
     at: Date.now(),
@@ -676,6 +678,8 @@ async function recordSyncStatus(response: MessageResponse<{ session: ImportSessi
     found: session?.foundCount,
     visibleBookmarkCount,
     totalStoredBookmarkCount,
+    archivedBookmarkCount,
+    deletedBookmarkCount,
     error: response.ok ? undefined : response.error
   });
 }
@@ -892,10 +896,12 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
   };
 
   await db.importSessions.add(session);
+  const savedBookmarks = [];
 
   for (const [index, bookmark] of payload.bookmarks.entries()) {
     try {
       const result = await upsertBookmark({ ...bookmark, sourceOrder: index });
+      savedBookmarks.push(result.bookmark);
       if (result.inserted || result.restored) {
         session.insertedCount += 1;
       } else {
@@ -911,13 +917,17 @@ export async function saveImportedBookmarks(payload: ImportPayload): Promise<Mes
   session.finishedAt = Date.now();
   await db.importSessions.put(session);
 
+  const settings = await getSettings();
+  if (settings.autoOrganizeRules?.length && savedBookmarks.length) {
+    await applyAutoOrganizeRules(savedBookmarks, settings.autoOrganizeRules);
+  }
+
   // Mirror-removal: when the import represents the complete, authoritative X
   // bookmark set and the user has opted in, soft-delete local X bookmarks that
   // are no longer present (un-bookmarked on x.com). Never runs on partial sets.
   let removedCount = 0;
   if (payload.mirrorComplete && session.status !== 'failed') {
     try {
-      const settings = await getSettings();
       if (settings.mirrorRemovals) {
         const presentKeys = new Set(payload.bookmarks.map((bookmark) => createDedupeKey(bookmark)));
         removedCount = await softDeleteMissingXBookmarks(presentKeys);
@@ -981,6 +991,11 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onMessage) {
 
     if (message.type === 'RESTORE_CLOUD_BACKUP') {
       restoreLatestCloudBackup().then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+    }
+
+    if (message.type === 'RESTORE_CLOUD_SNAPSHOT') {
+      restoreCloudSnapshot(message.snapshotId).then(sendResponse).catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
     }
 

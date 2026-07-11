@@ -17,10 +17,12 @@ import {
   listBookmarkItems,
   listSavedViews,
   moveBookmarksToFolder,
+  permanentlyDeleteBookmarks,
   renameFolder,
   removeTagFromBookmark,
   resetDomainData,
   restoreFolder,
+  restoreBookmarks,
   restoreTag,
   setBookmarkMarkedForExport,
   softDeleteBookmark,
@@ -268,6 +270,16 @@ describe('bookmarkRepository', () => {
 
     const archivedItems = await listBookmarkItems({ includeArchived: true });
     expect(archivedItems.map((item) => item.id)).toEqual([archived.bookmark.id]);
+
+    const trashItems = await listBookmarkItems({ includeDeleted: true });
+    expect(trashItems.map((item) => item.id)).toEqual([deleted.bookmark.id]);
+
+    await restoreBookmarks([deleted.bookmark.id]);
+    expect((await listBookmarkItems()).map((item) => item.id)).toContain(deleted.bookmark.id);
+
+    await softDeleteBookmark(deleted.bookmark.id);
+    await permanentlyDeleteBookmarks([deleted.bookmark.id]);
+    expect(await db.bookmarks.get(deleted.bookmark.id)).toBeUndefined();
   });
 
   it('lists bookmark items by X page visual order', async () => {

@@ -9,9 +9,10 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { Field, SelectInput, TextInput } from '../components/Field';
 import { PageShell } from '../components/PageShell';
 import { useTheme } from '../hooks/useTheme';
-import { exportLocalBackup, importLocalBackup, resetDomainData } from '../lib/db/bookmarkRepository';
+import { applyAutoOrganizeRules, exportLocalBackup, importLocalBackup, listBookmarkItems, resetDomainData } from '../lib/db/bookmarkRepository';
 import { downloadText } from '../lib/export/download';
 import { canUseCapability } from '../lib/license/pro';
+import { listCloudSnapshots } from '../lib/cloudSync/client';
 import { deactivateStoredLicense, validateStoredLicenseIfNeeded } from '../lib/license/service';
 import { sendRuntimeMessage } from '../lib/messaging/runtime';
 import {
@@ -25,11 +26,12 @@ import {
   setLastBackupStatus,
   subscribeToLocalStateChanges
 } from '../lib/storage/localStorage';
-import type { AutoSyncStatus, CloudSyncStatus, ImportDiagnostics, LastBackupStatus, LastSyncStatus, LicenseData } from '../shared/types';
+import type { AutoOrganizeRule, AutoSyncStatus, CloudSyncSnapshotSummary, CloudSyncStatus, ImportDiagnostics, LastBackupStatus, LastSyncStatus, LicenseData } from '../shared/types';
 import '../styles/globals.css';
 
 type Status = { type: 'success' | 'error'; message: string } | null;
 type BusyAction = 'export' | 'import' | 'clear' | 'diagnostics' | 'x-sync' | 'cloud-backup' | 'cloud-restore' | null;
+type RuleDialogState = { ruleId?: string; kind: AutoOrganizeRule['kind'] } | null;
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -78,19 +80,29 @@ function describeLastSync(sync: LastSyncStatus | null) {
     return `Last sync failed ${formatRelativeTime(sync.at)}: ${sync.error ?? 'Unknown error.'}`;
   }
 
-  const libraryCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
-  const parts = libraryCount != null ? [`${libraryCount} in library`] : [];
+  const visibleCount = sync.visibleBookmarkCount ?? sync.totalStoredBookmarkCount;
+  const archivedCount = sync.archivedBookmarkCount ?? 0;
+  const deletedCount = sync.deletedBookmarkCount ?? 0;
+  const hasRecordBreakdown = sync.archivedBookmarkCount != null || sync.deletedBookmarkCount != null;
+  const totalLocalRecords = visibleCount != null ? visibleCount + archivedCount + deletedCount : undefined;
+  const parts = visibleCount != null
+    ? [
+        hasRecordBreakdown
+          ? `${totalLocalRecords} local records (${visibleCount} visible, ${archivedCount} archived, ${deletedCount} in Trash)`
+          : `${visibleCount} visible bookmarks`
+      ]
+    : [];
   parts.push(`${sync.inserted ?? 0} new`);
   if (sync.duplicate != null) {
-    parts.push(`${sync.duplicate} duplicate`);
+    parts.push(`${sync.duplicate} already saved`);
   }
   if (sync.failed) {
     parts.push(`${sync.failed} failed`);
   }
   if (sync.removed) {
-    parts.push(`${sync.removed} removed`);
+    parts.push(`${sync.removed} moved to Trash`);
   }
-  parts.push(`${sync.found ?? 0} fetched`);
+  parts.push(`${sync.found ?? 0} fetched from X`);
   return `Last sync ${formatRelativeTime(sync.at)}: ${parts.join(', ')}.`;
 }
 
@@ -142,7 +154,17 @@ function Options() {
   const [cloudSyncInterval, setCloudSyncInterval] = useState(360);
   const [cloudSyncDeviceName, setCloudSyncDeviceName] = useState('');
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus | null>(null);
+  const [cloudSnapshots, setCloudSnapshots] = useState<CloudSyncSnapshotSummary[]>([]);
+  const [cloudHistoryLoading, setCloudHistoryLoading] = useState(false);
+  const [cloudRestoreTarget, setCloudRestoreTarget] = useState<CloudSyncSnapshotSummary | 'latest' | null>(null);
   const [mirrorRemovals, setMirrorRemovals] = useState(false);
+  const [autoOrganizeRules, setAutoOrganizeRules] = useState<AutoOrganizeRule[]>([]);
+  const [ruleDialog, setRuleDialog] = useState<RuleDialogState>(null);
+  const [ruleDraftKind, setRuleDraftKind] = useState<AutoOrganizeRule['kind']>('domain');
+  const [ruleDraftValue, setRuleDraftValue] = useState('');
+  const [ruleDraftTagName, setRuleDraftTagName] = useState('');
+  const [ruleDraftMarkForExport, setRuleDraftMarkForExport] = useState(false);
+  const [ruleDraftError, setRuleDraftError] = useState<string | null>(null);
   const [license, setLicense] = useState<LicenseData>(emptyLicenseData);
   const [lastBackup, setLastBackup] = useState<LastBackupStatus | null>(null);
   const [licenseBusy, setLicenseBusy] = useState(false);
@@ -171,6 +193,7 @@ function Options() {
       setCloudSyncInterval(s.cloudSyncIntervalMinutes);
       setCloudSyncDeviceName(s.cloudSyncDeviceName ?? '');
       setMirrorRemovals(s.mirrorRemovals);
+      setAutoOrganizeRules(s.autoOrganizeRules ?? []);
     });
     void validateStoredLicenseIfNeeded().then(setLicense);
     void getLastSyncStatus().then(setLastSync);
@@ -188,6 +211,26 @@ function Options() {
   useEffect(() => {
     void refreshAutoSyncStatus();
   }, [autoSync, syncInterval, refreshAutoSyncStatus]);
+
+  const refreshCloudHistory = useCallback(async () => {
+    if (!canUseCapability(license, 'cloud-sync')) {
+      setCloudSnapshots([]);
+      return;
+    }
+    setCloudHistoryLoading(true);
+    try {
+      const response = await listCloudSnapshots(license);
+      setCloudSnapshots(response.snapshots);
+    } catch {
+      setCloudSnapshots([]);
+    } finally {
+      setCloudHistoryLoading(false);
+    }
+  }, [license]);
+
+  useEffect(() => {
+    void refreshCloudHistory();
+  }, [refreshCloudHistory]);
 
   useEffect(
     () =>
@@ -220,7 +263,7 @@ function Options() {
       setStatus({
         type: 'success',
         message: session
-          ? `X API sync complete: ${session.insertedCount} new, ${session.duplicateCount} duplicate, ${session.failedCount} failed, ${session.foundCount} fetched.`
+          ? `X API sync complete: ${session.insertedCount} new, ${session.duplicateCount} already saved, ${session.failedCount} failed, ${session.foundCount} fetched from X.`
           : 'X API sync complete.'
       });
     } finally {
@@ -242,6 +285,7 @@ function Options() {
         return;
       }
       setCloudSyncStatus(response.data);
+      await refreshCloudHistory();
       setStatus({
         type: 'success',
         message: response.data.lastUploadResult === 'unchanged' ? 'Cloud backup already up to date.' : 'Cloud backup protected.'
@@ -256,16 +300,103 @@ function Options() {
       return;
     }
 
+    setCloudRestoreTarget(null);
     setBusyAction('cloud-restore');
     setStatus(null);
     try {
+      const safetyBackup = await exportLocalBackup();
+      await downloadText(`bookmarknest-before-cloud-restore-${safetyBackup.exportedAt}.json`, JSON.stringify(safetyBackup, null, 2), 'application/json;charset=utf-8');
       const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RESTORE_CLOUD_BACKUP' });
       if (!response.ok || !response.data) {
         setStatus({ type: 'error', message: response.error ?? 'Cloud restore failed.' });
         return;
       }
       setCloudSyncStatus(response.data);
-      setStatus({ type: 'success', message: 'Cloud backup restored. Open BookmarkNest pages will refresh automatically.' });
+      await refreshCloudHistory();
+      setStatus({ type: 'success', message: 'Cloud backup restored. A local safety backup was downloaded first.' });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleCloudSnapshotRestore(snapshot: CloudSyncSnapshotSummary) {
+    if (busyAction) {
+      return;
+    }
+    setCloudRestoreTarget(null);
+    setBusyAction('cloud-restore');
+    setStatus(null);
+    try {
+      const safetyBackup = await exportLocalBackup();
+      await downloadText(`bookmarknest-before-cloud-restore-${safetyBackup.exportedAt}.json`, JSON.stringify(safetyBackup, null, 2), 'application/json;charset=utf-8');
+      const response = await sendRuntimeMessage<CloudSyncStatus>({ type: 'RESTORE_CLOUD_SNAPSHOT', snapshotId: snapshot.id });
+      if (!response.ok || !response.data) {
+        setStatus({ type: 'error', message: response.error ?? 'Cloud restore failed.' });
+        return;
+      }
+      setCloudSyncStatus(response.data);
+      setStatus({ type: 'success', message: 'Selected cloud backup restored. A local safety backup was downloaded first.' });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function openRuleDialog(kind: AutoOrganizeRule['kind'], rule?: AutoOrganizeRule) {
+    setRuleDialog({ kind, ruleId: rule?.id });
+    setRuleDraftKind(rule?.kind ?? kind);
+    setRuleDraftValue(rule?.value ?? '');
+    setRuleDraftTagName(rule?.tagName ?? '');
+    setRuleDraftMarkForExport(rule?.markForExport ?? false);
+    setRuleDraftError(null);
+  }
+
+  function closeRuleDialog() {
+    setRuleDialog(null);
+    setRuleDraftError(null);
+  }
+
+  function saveAutoOrganizeRule() {
+    if (!ruleDialog) return;
+
+    const value = ruleDraftValue.trim();
+    if (!value) {
+      setRuleDraftError(ruleDraftKind === 'domain' ? 'Enter a domain to match.' : 'Enter an author handle to match.');
+      return;
+    }
+
+    const nextRule: AutoOrganizeRule = {
+      id: ruleDialog.ruleId ?? crypto.randomUUID(),
+      kind: ruleDraftKind,
+      value,
+      tagName: ruleDraftTagName.trim() || undefined,
+      markForExport: ruleDraftMarkForExport
+    };
+    const next = ruleDialog.ruleId
+      ? autoOrganizeRules.map((rule) => rule.id === ruleDialog.ruleId ? nextRule : rule)
+      : [...autoOrganizeRules, nextRule];
+
+    setAutoOrganizeRules(next);
+    void saveSettings({ autoOrganizeRules: next });
+    closeRuleDialog();
+  }
+
+  function removeAutoOrganizeRule(ruleId: string) {
+    const next = autoOrganizeRules.filter((rule) => rule.id !== ruleId);
+    setAutoOrganizeRules(next);
+    void saveSettings({ autoOrganizeRules: next });
+  }
+
+  async function applyRulesToExistingBookmarks() {
+    if (!autoOrganizeRules.length || busyAction) return;
+    setBusyAction('x-sync');
+    setStatus(null);
+    try {
+      const bookmarks = await listBookmarkItems();
+      await applyAutoOrganizeRules(bookmarks, autoOrganizeRules);
+      await markLocalDataChanged('library-updated');
+      setStatus({ type: 'success', message: `Applied ${autoOrganizeRules.length} rules to ${bookmarks.length} bookmarks.` });
+    } catch (error) {
+      setStatus({ type: 'error', message: error instanceof Error ? error.message : 'Unable to apply rules.' });
     } finally {
       setBusyAction(null);
     }
@@ -447,7 +578,6 @@ function Options() {
                     void saveSettings({ syncIntervalMinutes: next }).then(refreshAutoSyncStatus);
                   }}
                 >
-                  <option value="2">Every 2 minutes (testing)</option>
                   <option value="30">Every 30 minutes</option>
                   <option value="60">Every hour</option>
                   <option value="180">Every 3 hours</option>
@@ -490,7 +620,9 @@ function Options() {
             {cloudSyncStatus?.lastError ? <p className="mt-1 text-xs text-danger">{cloudSyncStatus.lastError}</p> : null}
             {cloudSyncStatus?.bookmarkCount != null ? (
               <p className="mt-1 text-xs text-muted-foreground">
-                {cloudSyncStatus.bookmarkCount} bookmarks, {cloudSyncStatus.savedViewCount ?? 0} saved views.
+                {cloudSyncStatus.bookmarkCount} total records protected ({cloudSyncStatus.visibleBookmarkCount ?? cloudSyncStatus.bookmarkCount} visible
+                {cloudSyncStatus.archivedBookmarkCount != null ? `, ${cloudSyncStatus.archivedBookmarkCount} archived` : ''}
+                {cloudSyncStatus.deletedBookmarkCount != null ? `, ${cloudSyncStatus.deletedBookmarkCount} in Trash` : cloudSyncStatus.retainedBookmarkCount ? `, ${cloudSyncStatus.retainedBookmarkCount} archived or in Trash` : ''}), {cloudSyncStatus.savedViewCount ?? 0} saved views.
               </p>
             ) : null}
           </div>
@@ -549,10 +681,33 @@ function Options() {
                 {busyAction === 'cloud-backup' ? <LoaderCircle size={14} className="animate-spin" /> : <Cloud size={14} />}
                 Protect now
               </Button>
-              <Button size="sm" variant="secondary" onClick={() => void handleCloudRestore()} disabled={!canUseCloudSync || Boolean(busyAction)}>
+              <Button size="sm" variant="secondary" onClick={() => setCloudRestoreTarget('latest')} disabled={!canUseCloudSync || Boolean(busyAction)}>
                 {busyAction === 'cloud-restore' ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}
                 Restore from cloud
               </Button>
+            </div>
+            <div className="border-t border-border/70 pt-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">Backup history</span>
+                <Button size="sm" variant="ghost" onClick={() => void refreshCloudHistory()} disabled={!canUseCloudSync || cloudHistoryLoading || Boolean(busyAction)}>
+                  {cloudHistoryLoading ? <LoaderCircle size={14} className="animate-spin" /> : <Cloud size={14} />}
+                  Refresh
+                </Button>
+              </div>
+              {cloudSnapshots.length ? (
+                <div className="mt-2 divide-y divide-border border border-border/70 bg-background/50">
+                  {cloudSnapshots.map((snapshot) => (
+                    <div key={snapshot.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs">
+                      <span>{formatBackupDate(snapshot.createdAt)} · {snapshot.bookmarkCount} total protected records · {snapshot.deviceName ?? 'This device'}</span>
+                      <Button size="xs" variant="ghost" onClick={() => setCloudRestoreTarget(snapshot)} disabled={Boolean(busyAction)}>
+                        Restore
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-2 text-xs text-muted-foreground">No cloud backup history yet.</p>
+              )}
             </div>
           </div>
         </div>
@@ -585,6 +740,28 @@ function Options() {
           <p className="mt-2 text-xs text-muted-foreground">
             Only acts on complete imports, never on partial or cancelled ones. Removals are recoverable from Trash.
           </p>
+        </div>
+        <div className="rounded-app border border-border bg-surface p-4">
+          <h2 className="text-sm font-semibold">Auto-organize rules</h2>
+          <p className="mt-2 text-sm text-muted-foreground">Apply local tags and export picks to new imports by author or linked domain.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" onClick={() => openRuleDialog('domain')}>Add domain rule</Button>
+            <Button size="sm" variant="secondary" onClick={() => openRuleDialog('author')}>Add author rule</Button>
+            <Button size="sm" variant="ghost" onClick={() => void applyRulesToExistingBookmarks()} disabled={!autoOrganizeRules.length || Boolean(busyAction)}>Apply to existing</Button>
+          </div>
+          {autoOrganizeRules.length ? (
+            <div className="mt-3 divide-y divide-border border border-border/70 bg-background/50">
+              {autoOrganizeRules.map((rule) => (
+                <div key={rule.id} className="flex items-center justify-between gap-2 px-3 py-2 text-xs">
+                  <span>{rule.kind === 'domain' ? 'Domain' : 'Author'}: {rule.value}{rule.tagName ? ` -> ${rule.tagName}` : ''}{rule.markForExport ? ' -> Export picks' : ''}</span>
+                  <div className="flex items-center gap-1">
+                    <Button size="xs" variant="ghost" onClick={() => openRuleDialog(rule.kind, rule)}>Edit</Button>
+                    <Button size="xs" variant="ghost" onClick={() => removeAutoOrganizeRule(rule.id)}>Remove</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="rounded-app border border-border bg-surface p-4">
           <h2 className="text-sm font-semibold">Data</h2>
@@ -665,7 +842,7 @@ function Options() {
             Bookmark content stays in local browser storage unless you export it or enable encrypted Cloud Sync.
           </p>
         </div>
-        {showDiagnostics ? (
+        {showDiagnostics || lastSync?.ok === false ? (
           <div className="rounded-app border border-border bg-surface p-4">
             <h2 className="text-sm font-semibold">Import diagnostics</h2>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -709,6 +886,94 @@ function Options() {
       >
         <div className="rounded-app border border-danger/20 bg-danger/5 px-3 py-2 text-sm text-muted-foreground">
           Export a backup first if you may need to restore this library later. Uninstalling the extension has the same local data risk.
+        </div>
+      </Dialog>
+      <Dialog
+        open={Boolean(ruleDialog)}
+        title={ruleDialog?.ruleId ? 'Edit auto-organize rule' : 'Add auto-organize rule'}
+        description="Rules run locally after a complete import. They never change your bookmarks on X."
+        onClose={closeRuleDialog}
+        footer={
+          <>
+            <Button onClick={closeRuleDialog}>Cancel</Button>
+            <Button onClick={saveAutoOrganizeRule}>Save rule</Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Field label="Match">
+            <SelectInput value={ruleDraftKind} onChange={(event) => setRuleDraftKind(event.target.value as AutoOrganizeRule['kind'])}>
+              <option value="domain">Linked domain</option>
+              <option value="author">Author handle</option>
+            </SelectInput>
+          </Field>
+          <Field
+            label={ruleDraftKind === 'domain' ? 'Domain' : 'Author handle'}
+            hint={ruleDraftKind === 'domain' ? 'For example: arxiv.org or github.com' : 'For example: karpathy'}
+          >
+            <TextInput
+              value={ruleDraftValue}
+              onChange={(event) => {
+                setRuleDraftValue(event.target.value);
+                setRuleDraftError(null);
+              }}
+              placeholder={ruleDraftKind === 'domain' ? 'arxiv.org' : 'Author handle'}
+              aria-invalid={Boolean(ruleDraftError)}
+            />
+          </Field>
+          {ruleDraftError ? <p className="text-sm text-danger" role="alert">{ruleDraftError}</p> : null}
+          <Field label="Tag" hint="Optional. Create or add this tag whenever the rule matches.">
+            <TextInput value={ruleDraftTagName} onChange={(event) => setRuleDraftTagName(event.target.value)} placeholder="Paper" />
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ruleDraftMarkForExport}
+              onChange={(event) => setRuleDraftMarkForExport(event.target.checked)}
+              className="h-4 w-4 rounded border-border accent-primary"
+            />
+            Add matching bookmarks to Export picks
+          </label>
+        </div>
+      </Dialog>
+      <Dialog
+        open={Boolean(cloudRestoreTarget)}
+        title="Restore cloud backup?"
+        description={
+          cloudRestoreTarget === 'latest'
+            ? "Your latest encrypted cloud backup will replace this browser's local library."
+            : cloudRestoreTarget
+              ? `The cloud backup from ${formatBackupDate(cloudRestoreTarget.createdAt)} will replace this browser's local library.`
+              : undefined
+        }
+        onClose={() => {
+          if (!busyAction) {
+            setCloudRestoreTarget(null);
+          }
+        }}
+        closeOnOverlayClick={!busyAction}
+        footer={
+          <>
+            <Button onClick={() => setCloudRestoreTarget(null)} disabled={Boolean(busyAction)}>Cancel</Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (cloudRestoreTarget === 'latest') {
+                  void handleCloudRestore();
+                } else if (cloudRestoreTarget) {
+                  void handleCloudSnapshotRestore(cloudRestoreTarget);
+                }
+              }}
+              disabled={Boolean(busyAction)}
+            >
+              {busyAction === 'cloud-restore' ? <LoaderCircle size={16} className="animate-spin" /> : <Upload size={16} />}
+              {busyAction === 'cloud-restore' ? 'Restoring...' : 'Restore backup'}
+            </Button>
+          </>
+        }
+      >
+        <div className="rounded-app border border-accent/25 bg-accent/10 px-3 py-2 text-sm text-muted-foreground">
+          BookmarkNest will download a local safety backup before replacing any data.
         </div>
       </Dialog>
     </PageShell>

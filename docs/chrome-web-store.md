@@ -23,7 +23,8 @@ BookmarkNest does not request `<all_urls>`, `activeTab`, or `scripting`.
 - State that optional Cloud Sync uploads an encrypted backup and does not send plaintext bookmark content.
 - State that License activation sends license/device data to the license service.
 - State that import diagnostics contain counters and technical errors, not bookmark text.
-- Describe Pro pricing as $2.99/month or $24.99/year before taxes; checkout displays any applicable taxes.
+- Describe Pro pricing as $2.99/month, $24.99/year, or a $49 one-time Lifetime Pro purchase before taxes; checkout displays any applicable taxes.
+- Describe Lifetime Pro as access to the Pro features available in BookmarkNest while the product is available. Do not describe Cloud Sync as unlimited: it retains up to five backup versions and may throttle changed backups to one per minute.
 
 ## Short Description
 
@@ -43,6 +44,6 @@ Core features:
 - Add local research notes to bookmarks with Pro.
 - Export JSON backups on Free.
 - Unlock Markdown and CSV exports, notes, saved views, bulk actions, background sync, mirror removals, and encrypted Cloud Sync with Pro.
-- Choose Monthly Pro for $2.99/month or Annual Pro for $24.99/year. Taxes may apply at checkout.
+- Choose Monthly Pro for $2.99/month, Annual Pro for $24.99/year, or Lifetime Pro for a one-time $49 purchase. Taxes may apply at checkout. Lifetime Pro covers the Pro features available in BookmarkNest while the product is available. Cloud Sync retains up to five backup versions and may throttle changed backups to one per minute.
 
 Bookmark content, notes, saved views, authors, tags, folders, and media URLs are stored locally in your browser by default. If you enable Cloud Sync, BookmarkNest uploads an encrypted backup that is decrypted with your License Key. Plain bookmark content is not sent to the Cloud Sync service.

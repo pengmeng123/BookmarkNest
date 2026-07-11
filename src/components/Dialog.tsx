@@ -27,6 +27,9 @@ const formControlSelector = 'input:not([disabled]), select:not([disabled]), text
 
 export function Dialog({ open, title, description, children, footer, onClose, className, closeOnOverlayClick = true }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!open) {
@@ -43,7 +46,7 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         event.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
 
@@ -74,7 +77,7 @@ export function Dialog({ open, title, description, children, footer, onClose, cl
       document.removeEventListener('keydown', handleKeyDown);
       previousFocus?.focus();
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) {
     return null;
