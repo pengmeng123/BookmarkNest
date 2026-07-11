@@ -224,7 +224,7 @@ function Upgrade() {
           <PlanCard
             title="Lifetime Pro"
             price="$49"
-            caption="One payment for permanent Pro access"
+            caption="One payment for Lifetime Pro access"
             badge="Launch offer"
             features={proFeatures.map((text) => ({ text, included: true }))}
             action={
@@ -236,6 +236,7 @@ function Upgrade() {
             note="One-time purchase. Cloud Sync retains up to five backup versions and may throttle changed backups to one per minute."
           />
         </section>
+        <p className="mt-3 text-center text-xs text-muted-foreground">Taxes may apply at checkout.</p>
 
         <section className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">
           <div className="rounded-app border border-border bg-surface p-5 shadow-sm">

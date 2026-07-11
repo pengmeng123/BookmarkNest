@@ -31,7 +31,7 @@ export const manifest: ManifestV3Export = {
     'cookies',
     'alarms'
   ],
-  host_permissions: ['https://x.com/*', 'https://twitter.com/*', 'https://bookmarknest-license-worker.pp121111.workers.dev/*'],
+  host_permissions: ['https://x.com/*', 'https://twitter.com/*', 'https://bookmarknest-license.usetoolmint.com/*'],
   content_scripts: [
     {
       matches: ['https://x.com/*', 'https://twitter.com/*'],

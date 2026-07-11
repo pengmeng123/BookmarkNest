@@ -15,7 +15,7 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-const DEFAULT_WORKER_URL = 'https://bookmarknest-license-worker.pp121111.workers.dev';
+const DEFAULT_WORKER_URL = 'https://bookmarknest-license.usetoolmint.com';
 
 function usage() {
   console.log(`Usage:
