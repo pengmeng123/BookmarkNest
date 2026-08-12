@@ -120,7 +120,10 @@ function BookmarkListView({
     return loadingMore ? `Loading ${matches.length} of ${totalCount}...` : `${matches.length} of ${totalCount} bookmarks loaded`;
   }, [hasMore, loadingMore, matches.length, totalCount]);
 
-  if (loading) {
+  // Keep the current virtualized list mounted during refreshes. Replacing it with
+  // the short loading state while the window is scrolled would clamp scrollY,
+  // then make the page jump again when the refreshed items are rendered.
+  if (loading && matches.length === 0) {
     return (
       <div className="flex min-h-[460px] items-center justify-center p-8 text-sm text-muted-foreground">
         Loading bookmarks...

@@ -2720,7 +2720,7 @@ function App() {
             totalCount={bookmarkQuery.totalCount}
             hasMore={bookmarkQuery.hasMore}
             loadingMore={bookmarkQuery.loadingMore}
-            loading={library.loading || bookmarkQuery.loading}
+            loading={bookmarkQuery.loading && searchMatches.length === 0}
             error={bookmarkQuery.error ?? library.error}
             hasSearchQuery={Boolean(debouncedSearchQuery.trim())}
             focusedIndex={focusedIndex}
